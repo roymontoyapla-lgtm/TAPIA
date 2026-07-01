@@ -119,6 +119,24 @@ def init_db() -> None:
             "ON wearable_data(patient_id, fecha)"
         )
 
+        # Tabla de analisis clinicos
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS lab_results (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id   INTEGER NOT NULL REFERENCES patients(id),
+                fecha        TEXT,
+                laboratorio  TEXT,
+                raw_json     TEXT NOT NULL,
+                score_lab    INTEGER DEFAULT 0,
+                imported_at  TEXT NOT NULL,
+                notes        TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lab_patient "
+            "ON lab_results(patient_id)"
+        )
+
     logger.debug("Base de datos inicializada en %s", _DB_PATH)
 
 
@@ -441,3 +459,52 @@ def _safe_decrypt(value: str) -> str:
         return decrypt(value)
     except Exception:
         return value
+
+
+# ---------------------------------------------------------------------------
+# Analisis clinicos
+# ---------------------------------------------------------------------------
+
+def save_lab_result(
+    patient_id: int,
+    raw_json: str,
+    fecha: Optional[str] = None,
+    laboratorio: Optional[str] = None,
+    score_lab: int = 0,
+    notes: str = "",
+) -> int:
+    """Guarda un analisis clinico para un paciente."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO lab_results
+               (patient_id, fecha, laboratorio, raw_json, score_lab, imported_at, notes)
+               VALUES (?,?,?,?,?,?,?)""",
+            (patient_id, fecha, laboratorio, raw_json, score_lab, now, notes),
+        )
+    return cur.lastrowid
+
+
+def get_lab_results(patient_id: int) -> List[Dict[str, Any]]:
+    """Devuelve todos los analisis de un paciente."""
+    import json as _json
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM lab_results WHERE patient_id = ? ORDER BY imported_at DESC",
+            (patient_id,),
+        ).fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["data"] = _json.loads(d["raw_json"])
+        except Exception:
+            d["data"] = {}
+        results.append(d)
+    return results
+
+
+def get_latest_lab(patient_id: int) -> Optional[Dict[str, Any]]:
+    """Devuelve el analisis mas reciente de un paciente."""
+    results = get_lab_results(patient_id)
+    return results[0] if results else None

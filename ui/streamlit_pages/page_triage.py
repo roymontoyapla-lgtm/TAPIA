@@ -21,6 +21,8 @@ from ...core.wearable import filter_by_days, summarize
 from ...db import database as db
 from ...export.pdf import REPORTLAB_OK, save_pdf
 from ...wearables.detector import load_and_detect, ADAPTER_NAMES
+from ...core.lab_analyzer import extract_lab_values, lab_urgency_score
+from ...db.database import save_lab_result, get_latest_lab
 from ...wearables.adapter_apple_xml import AppleHealthXMLAdapter
 from ...compliance.audit import init_audit_table, log, Action
 from ..session import TriageRecord, init, save_triage, set_wearable_records
@@ -248,7 +250,7 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
         st.metric("Puntuacion", local_score,
                   delta=URGENCY_LABELS[local_bucket], delta_color="off")
 
-    tab1, tab2, tab3 = st.tabs(["Motivos de score", "Justificacion IA", "Informe completo"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Motivos de score", "Justificacion IA", "Analisis clinico", "Informe completo"])
     with tab1:
         st.markdown("**Factores del score:**")
         for m in local_motivos: st.markdown(f"- {m}")
@@ -263,6 +265,36 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
         if not ai.get("justification") and not ai.get("red_flags"):
             st.info("La IA no genero justificacion adicional.")
     with tab3:
+        if lab_data and lab_data.get("_success"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("**Hemograma**")
+                hema = lab_data.get("hemograma", {})
+                for k, v in hema.items():
+                    if v is not None:
+                        st.markdown(f"- {k.replace('_',' ')}: **{v}**")
+            with col2:
+                st.markdown("**Bioquimica**")
+                bio = lab_data.get("bioquimica", {})
+                for k, v in bio.items():
+                    if v is not None:
+                        st.markdown(f"- {k.replace('_',' ')}: **{v}**")
+            with col3:
+                st.markdown("**Orina**")
+                ori = lab_data.get("orina", {})
+                for k, v in ori.items():
+                    if v is not None:
+                        st.markdown(f"- {k.replace('_',' ')}: **{v}**")
+            if lab_data.get("valores_fuera_rango"):
+                st.error("**Valores fuera de rango:**")
+                for v in lab_data["valores_fuera_rango"]:
+                    st.markdown(f"- {v}")
+            if lab_score > 0:
+                st.warning(f"Score adicional por analisis: **+{lab_score}**")
+        else:
+            st.info("No se subio ningun analisis clinico en este triaje.")
+
+    with tab4:
         st.code(report, language=None)
 
     st.divider()
@@ -339,6 +371,15 @@ def run() -> None:
         st.divider()
         q = _section_questionnaire()
         st.divider()
+        st.divider()
+        st.subheader("Analisis clinicos (opcional)")
+        st.caption("Sube una foto o imagen de tu analisis de sangre u orina.")
+        lab_image = st.file_uploader(
+            "Imagen del analisis (JPG, PNG)",
+            type=["jpg", "jpeg", "png"],
+            key="lab_image_upload",
+        )
+
         submitted = st.form_submit_button(
             "Ejecutar triaje", type="primary", use_container_width=True
         )
@@ -363,8 +404,42 @@ def run() -> None:
                     local_bucket, local_score, local_motivos,
                     {"urgency": "2_semanas", "justification": "", "red_flags": []}, local_bucket,
                 )
+                # Procesar analisis clinico si se subio imagen
+                lab_data  = {}
+                lab_score = 0
+                lab_motivos = []
+                lab_image = st.session_state.get("lab_image_upload")
+                if lab_image is not None:
+                    with st.spinner("Leyendo analisis clinico con IA..."):
+                        mime = "image/jpeg" if lab_image.name.lower().endswith((".jpg",".jpeg")) else "image/png"
+                        lab_data = extract_lab_values(lab_image.read(), mime_type=mime)
+                        if lab_data.get("_success"):
+                            lab_score, lab_motivos = lab_urgency_score(lab_data)
+                            if patient_id:
+                                import json as _json
+                                save_lab_result(
+                                    patient_id=patient_id,
+                                    raw_json=_json.dumps(lab_data, ensure_ascii=False),
+                                    fecha=lab_data.get("fecha_analisis"),
+                                    laboratorio=lab_data.get("laboratorio"),
+                                    score_lab=lab_score,
+                                )
+                            st.success(f"Analisis leido correctamente. Valores fuera de rango: {len(lab_data.get('valores_fuera_rango', []))}")
+                        else:
+                            st.warning(f"No se pudo leer el analisis: {lab_data.get('_error', '')}")
+
                 ai           = get_ai_urgency(pre, patient_name=patient.name)
+                # Combinar score local + score de analisis
+                combined_score = local_score + lab_score
+                if lab_motivos:
+                    local_motivos.extend([f"[Lab] {m}" for m in lab_motivos])
+
                 final_bucket = merge_buckets(local_bucket, ai.get("urgency", "2_semanas"))
+                # Si el score de lab es muy alto, escalar urgencia
+                if combined_score >= 9 and final_bucket != "urgente":
+                    final_bucket = "urgente"
+                elif combined_score >= 5 and final_bucket == "2_semanas":
+                    final_bucket = "7_dias"
                 report = build_report(
                     patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos, ai, final_bucket,
