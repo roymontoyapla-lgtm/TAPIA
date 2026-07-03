@@ -1,0 +1,87 @@
+# ============================================================
+# TAPIA - Configuración general
+# Edita este fichero para ajustar umbrales clínicos, IA y UI
+# sin tocar el código fuente.
+# ============================================================
+
+app:
+  name: "TAPIA - Triaje Automatizado por IA"
+  version: "1.1.0"
+  geometry: "980x700"
+  log_level: "WARNING"   # DEBUG | INFO | WARNING | ERROR
+
+# --- Umbrales clínicos (wearable) ---
+thresholds:
+  sleep:
+    low_hours: 6              # Por debajo → "noche mala"
+    low_days_month_ap: 10     # Días en 30d que activan flag AP
+    low_days_month_urgent: 15 # Días en 30d que suman score urgencia (+3)
+    low_days_month_moderate: 8  # Días en 30d (+2)
+    low_days_8w_ap: 20        # Días en 56d flag AP
+    low_days_8w_persistent: 25 # Días en 56d (+1 urgencia)
+
+  activity:
+    very_low_steps: 3000       # Pasos/día → "muy sedentario"
+    low_days_month_ap: 10      # Días en 30d flag AP
+    low_days_month_urgent: 15  # Días en 30d (+2 urgencia)
+    low_days_month_moderate: 8 # Días en 30d (+1 urgencia)
+
+  heart_rate:
+    high_resting_bpm: 90       # Umbral FC reposo alta
+    high_days_specialist: 3    # Días en 30d → deriva a especialista
+    high_days_score_4: 5       # Días en 30d (+4 urgencia)
+    high_days_score_3: 3       # Días en 30d (+3 urgencia)
+
+# --- Umbrales de score de urgencia ---
+urgency:
+  urgent_threshold: 9    # score >= este valor → URGENTE
+  week_threshold: 5      # score >= este valor → 7 días
+  # Por debajo → 2 semanas
+
+# --- Puntuaciones de factores ---
+scoring:
+  age:
+    over_75: 3
+    over_65: 2
+    over_50: 1
+  fever: 3
+  fever_plus_bad_general: 2   # bonus combinado
+  headache: 1
+  general_feeling:
+    bad: 3    # valor <= 2
+    fair: 1   # valor == 3
+  rest:
+    bad: 2    # valor <= 2
+    fair: 1   # valor == 3
+  exercise_days:
+    very_low: 2   # <= 1 día
+    low: 1        # <= 3 días
+
+# --- IA ---
+ai:
+  provider: "anthropic"          # "openai" | "anthropic" | "disabled"
+  openai_models:
+    - "gpt-4o-mini"
+    - "gpt-4o"
+  anthropic_model: "claude-sonnet-4-6"
+  temperature: 0.3
+  max_tokens: 1000
+  anonymize_before_send: true  # Reemplaza nombre por "PACIENTE" antes de enviar
+
+# --- Wearable ---
+wearable:
+  window_days_short: 30
+  window_days_long: 56
+  date_field: "fecha"
+  fields:
+    resting_hr:  "pulso_reposo_bpm_media"
+    steps:       "pasos"
+    exercise_min: "min_ejercicio"
+    sleep_h:     "sueno_asleep_horas"
+    resp_rate:   "respiraciones_por_min_media"
+    hrv:         "hrv_sdnn_ms_media"
+
+# --- PDF ---
+pdf:
+  margins_cm: 2
+  font_size: 10
