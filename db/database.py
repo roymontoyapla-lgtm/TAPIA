@@ -144,18 +144,57 @@ def init_db() -> None:
 # Pacientes
 # ---------------------------------------------------------------------------
 
+def update_patient_info(patient_id: int, age: int, sex: str) -> None:
+    """
+    Actualiza edad y sexo de un paciente existente si los valores nuevos
+    son validos (age>0, sex no vacio). Se llama en cada triaje para
+    mantener el registro maestro sincronizado con el formulario.
+    """
+    if not age and not sex:
+        return
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT age, sex FROM patients WHERE id = ?", (patient_id,)
+        ).fetchone()
+        if row is None:
+            return
+        new_age = age if age else row["age"]
+        new_sex = sex if sex else row["sex"]
+        if new_age != row["age"] or new_sex != row["sex"]:
+            conn.execute(
+                "UPDATE patients SET age = ?, sex = ? WHERE id = ?",
+                (new_age, new_sex, patient_id),
+            )
+            logger.debug("Paciente id=%d sincronizado: age=%s sex=%s", patient_id, new_age, new_sex)
+
+
 def get_or_create_patient(name: str, age: int, sex: str) -> int:
     """
     Busca un paciente por nombre cifrado o lo crea si no existe.
     Devuelve el patient_id.
+
+    Si el paciente ya existe pero tiene edad/sexo vacios (por ejemplo por
+    un registro antiguo incompleto) y ahora se proporcionan valores validos,
+    se actualiza el registro para completarlo (auto-reparacion).
+
     Nota: la busqueda descifra todos los nombres (O(n) sobre pacientes).
     """
     with _connect() as conn:
-        rows = conn.execute("SELECT id, name FROM patients").fetchall()
+        rows = conn.execute("SELECT id, name, age, sex FROM patients").fetchall()
         for row in rows:
             try:
                 if decrypt(row["name"]).lower() == name.lower():
-                    return row["id"]
+                    pid = row["id"]
+                    # Auto-reparacion: completar edad/sexo si faltaban
+                    needs_age = (not row["age"]) and age
+                    needs_sex = (not row["sex"]) and sex
+                    if needs_age or needs_sex:
+                        conn.execute(
+                            "UPDATE patients SET age = ?, sex = ? WHERE id = ?",
+                            (age if age else row["age"], sex if sex else row["sex"], pid),
+                        )
+                        logger.info("Paciente id=%d actualizado con edad/sexo faltantes.", pid)
+                    return pid
             except Exception:
                 continue
 

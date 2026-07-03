@@ -80,11 +80,13 @@ def _section_questionnaire() -> Questionnaire:
     )
 
 
-def _section_wearable(patient_name: str):
+def _section_wearable(patient):
     """
     Sube el JSON, lo importa en la BD de forma incremental,
     y devuelve los registros historicos acumulados para el analisis.
+    `patient` es un PatientInfo con name, age y sex ya rellenados en el formulario.
     """
+    patient_name = patient.name
     st.subheader("Datos del wearable")
 
     with st.expander("Formatos soportados"):
@@ -172,7 +174,7 @@ def _section_wearable(patient_name: str):
         # Importacion incremental en BD
         if patient_name:
             try:
-                pid = db.get_or_create_patient(patient_name, 0, "")
+                pid = db.get_or_create_patient(patient_name, patient.age, patient.sex)
                 result = db.import_wearable_records(pid, new_records, source=adapter_name)
                 patient_id = pid
 
@@ -400,8 +402,13 @@ def run() -> None:
             "Ejecutar triaje", type="primary", use_container_width=True
         )
 
-    wearable_result = _section_wearable(patient.name)
+    wearable_result = _section_wearable(patient)
     records, w30, w56, adapter_name, patient_id = wearable_result
+
+    # Sincroniza edad/sexo del paciente en BD con lo indicado en el formulario
+    # (autorrepara registros antiguos que se guardaron sin estos datos)
+    if patient_id:
+        db.update_patient_info(patient_id, patient.age, patient.sex)
 
     if submitted:
         if not patient.name:
