@@ -22,6 +22,7 @@ from ...db import database as db
 from ...export.pdf import REPORTLAB_OK, save_pdf
 from ...wearables.detector import load_and_detect, ADAPTER_NAMES
 from ...core.lab_analyzer import extract_lab_values, lab_urgency_score
+from ...core.anthropometry import obesity_urgency_score
 from ...db.database import save_lab_result, get_latest_lab
 from ...wearables.adapter_apple_xml import AppleHealthXMLAdapter
 from ...compliance.audit import init_audit_table, log, Action
@@ -78,6 +79,36 @@ def _section_questionnaire() -> Questionnaire:
         rested_enough=int(rest), exercise_days_last_weeks=int(exdays),
         other_notes=chronic.strip(),
     )
+
+
+def _section_anthropometry():
+    """
+    Peso, altura y circunferencia abdominal (opcional).
+    Devuelve dict {weight_kg, height_cm, waist_cm} con None si no se rellena.
+    """
+    st.subheader("Antropometria (opcional)")
+    st.caption("Estos datos permiten calcular el IMC y el riesgo cardiovascular por obesidad abdominal.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        weight = st.number_input(
+            "Peso (kg)", min_value=0.0, max_value=400.0, value=0.0, step=0.5,
+            help="Dejar en 0 si no se quiere indicar.",
+        )
+    with c2:
+        height = st.number_input(
+            "Altura (cm)", min_value=0.0, max_value=250.0, value=0.0, step=1.0,
+            help="Dejar en 0 si no se quiere indicar.",
+        )
+    with c3:
+        waist = st.number_input(
+            "Circunferencia abdominal (cm)", min_value=0.0, max_value=250.0, value=0.0, step=1.0,
+            help="Medida a la altura del ombligo. Dejar en 0 si no se quiere indicar.",
+        )
+    return {
+        "weight_kg": weight if weight > 0 else None,
+        "height_cm": height if height > 0 else None,
+        "waist_cm":  waist  if waist  > 0 else None,
+    }
 
 
 def _section_wearable(patient):
@@ -236,7 +267,9 @@ def _preview_wearable(w) -> None:
 
 def _section_result(patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos,
-                    ai, final_bucket, report) -> None:
+                    ai, final_bucket, report,
+                    lab_data=None, lab_score=0,
+                    anthro_data=None, obesity_score=0) -> None:
     st.divider()
     st.subheader("Resultado del triaje")
     _urgency_badge(final_bucket)
@@ -261,7 +294,10 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
         st.metric("Puntuacion", local_score,
                   delta=URGENCY_LABELS[local_bucket], delta_color="off")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Motivos de score", "Justificacion IA", "Analisis clinico", "Informe completo"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Motivos de score", "Justificacion IA", "Analisis clinico",
+        "Antropometria", "Informe completo",
+    ])
     with tab1:
         st.markdown("**Factores del score:**")
         for m in local_motivos: st.markdown(f"- {m}")
@@ -306,6 +342,37 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
             st.info("No se subio ningun analisis clinico en este triaje.")
 
     with tab4:
+        if anthro_data and (anthro_data.get("weight_kg") or anthro_data.get("height_cm") or anthro_data.get("waist_cm")):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Peso",   f"{anthro_data.get('weight_kg') or 'N/D'} kg")
+            c2.metric("Altura", f"{anthro_data.get('height_cm') or 'N/D'} cm")
+            c3.metric("Circunf. abdominal", f"{anthro_data.get('waist_cm') or 'N/D'} cm")
+
+            c4, c5 = st.columns(2)
+            with c4:
+                st.markdown("**IMC (Indice de Masa Corporal)**")
+                bmi = anthro_data.get("bmi")
+                bmi_cat = anthro_data.get("bmi_category", "N/D")
+                if bmi is not None:
+                    st.metric("IMC", bmi, delta=bmi_cat, delta_color="off")
+                else:
+                    st.info("Introduce peso y altura para calcular el IMC.")
+            with c5:
+                st.markdown("**Riesgo cardiovascular (circunf. abdominal)**")
+                waist_cat = anthro_data.get("waist_category", "N/D")
+                if anthro_data.get("waist_cm") is not None:
+                    color = "#c0392b" if "muy" in waist_cat else ("#e67e22" if "aumentado" in waist_cat else "#27ae60")
+                    st.markdown(f"<span style='color:{color};font-weight:bold;'>{waist_cat}</span>",
+                               unsafe_allow_html=True)
+                else:
+                    st.info("Introduce la circunferencia abdominal para calcular el riesgo.")
+
+            if obesity_score > 0:
+                st.warning(f"Score adicional por antropometria: **+{obesity_score}**")
+        else:
+            st.info("No se introdujeron datos antropometricos en este triaje.")
+
+    with tab5:
         st.code(report, language=None)
 
     st.divider()
@@ -381,6 +448,8 @@ def run() -> None:
         patient = _section_patient()
         st.divider()
         q = _section_questionnaire()
+        st.divider()
+        anthro_input = _section_anthropometry()
         st.divider()
         st.divider()
         st.subheader("Analisis clinicos (opcional)")
@@ -462,14 +531,30 @@ def run() -> None:
                         else:
                             st.warning(f"No se pudo leer el analisis: {lab_data.get('_error', '')}")
 
+                # Calcular riesgo de obesidad (peso/altura/circunf. abdominal)
+                obesity_score, obesity_motivos, bmi, bmi_cat, waist_cat = obesity_urgency_score(
+                    anthro_input.get("weight_kg"),
+                    anthro_input.get("height_cm"),
+                    anthro_input.get("waist_cm"),
+                    patient.sex,
+                )
+                anthro_data = {
+                    **anthro_input,
+                    "bmi": bmi,
+                    "bmi_category": bmi_cat,
+                    "waist_category": waist_cat,
+                }
+                if obesity_motivos:
+                    local_motivos.extend([f"[Antropometria] {m}" for m in obesity_motivos])
+
                 ai           = get_ai_urgency(pre, patient_name=patient.name)
-                # Combinar score local + score de analisis
-                combined_score = local_score + lab_score
+                # Combinar score local + score de analisis + score de obesidad
+                combined_score = local_score + lab_score + obesity_score
                 if lab_motivos:
                     local_motivos.extend([f"[Lab] {m}" for m in lab_motivos])
 
                 final_bucket = merge_buckets(local_bucket, ai.get("urgency", "2_semanas"))
-                # Si el score de lab es muy alto, escalar urgencia
+                # Si el score combinado es muy alto, escalar urgencia
                 if combined_score >= 9 and final_bucket != "urgente":
                     final_bucket = "urgente"
                 elif combined_score >= 5 and final_bucket == "2_semanas":
@@ -477,6 +562,7 @@ def run() -> None:
                 report = build_report(
                     patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos, ai, final_bucket,
+                    anthro=anthro_data,
                 )
 
                 save_triage(TriageRecord(
@@ -506,6 +592,8 @@ def run() -> None:
                 _section_result(
                     patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos, ai, final_bucket, report,
+                    lab_data=lab_data, lab_score=lab_score,
+                    anthro_data=anthro_data, obesity_score=obesity_score,
                 )
             except Exception as e:
                 st.error(f"Error durante el triaje: {e}")

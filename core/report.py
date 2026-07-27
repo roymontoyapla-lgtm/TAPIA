@@ -1,7 +1,7 @@
 """Construcción del informe de texto."""
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .models import PatientInfo, Questionnaire, WearableSummary
 from .triage import URGENCY_LABELS
@@ -24,6 +24,7 @@ def build_report(
     local_motivos: List[str],
     ai: Dict[str, Any],
     final_bucket: str,
+    anthro: Optional[Dict[str, Any]] = None,
 ) -> str:
     now       = datetime.now().strftime("%Y-%m-%d %H:%M")
     ai_bucket = ai.get("urgency", "2_semanas")
@@ -47,6 +48,20 @@ def build_report(
         f"  Días ejercicio (ult. sem.)  : {q.exercise_days_last_weeks}",
         f"  Alimentación                : {q.diet_style or 'N/D'}",
         f"  Enfermedad crónica          : {q.other_notes or 'N/D'}",
+    ]
+
+    if anthro and (anthro.get("weight_kg") or anthro.get("height_cm") or anthro.get("waist_cm")):
+        lines += [
+            "",
+            "── 1b) ANTROPOMETRÍA Y RIESGO DE OBESIDAD " + "─" * 17,
+            f"  Peso                 : {_fmt(anthro.get('weight_kg'), ' kg')}",
+            f"  Altura               : {_fmt(anthro.get('height_cm'), ' cm')}",
+            f"  Circunferencia abdom.: {_fmt(anthro.get('waist_cm'), ' cm')}",
+            f"  IMC                  : {_fmt(anthro.get('bmi'))}  ({anthro.get('bmi_category', 'N/D')})",
+            f"  Riesgo cardiovascular (circunf.): {anthro.get('waist_category', 'N/D')}",
+        ]
+
+    lines += [
         "",
         "── 2) WEARABLE – ÚLTIMO MES " + "─" * 31,
         f"  Días: {w30.days}  |  Rango: {w30.range}",
