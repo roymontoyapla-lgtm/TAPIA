@@ -153,6 +153,13 @@ class _Wearable:
     })
 
 
+class _WearableSync:
+    provider:   str  = _deep_get(_raw, "wearable_sync", "provider", default="dropbox")
+    folder:     str  = _deep_get(_raw, "wearable_sync", "folder",   default="")
+    extensions: list = _deep_get(_raw, "wearable_sync", "extensions", default=[".json"])
+    max_files:  int  = _deep_get(_raw, "wearable_sync", "max_files_per_sync", default=30)
+
+
 class _App:
     name:     str = _deep_get(_raw, "app", "name",     default="TAPIA")
     version:  str = _deep_get(_raw, "app", "version",  default="1.1.0")
@@ -169,6 +176,7 @@ class Config:
     lifestyle  = _Lifestyle()
     ai         = _AI()
     wearable   = _Wearable()
+    wearable_sync = _WearableSync()
 
 
 cfg = Config()

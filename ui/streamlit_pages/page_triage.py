@@ -21,6 +21,8 @@ from ...core.wearable import filter_by_days, summarize
 from ...db import database as db
 from ...export.pdf import REPORTLAB_OK, save_pdf
 from ...wearables.detector import load_and_detect, ADAPTER_NAMES
+from ...wearables.cloud import DropboxSource
+from ...wearables.sync import sync_patient
 from ...core.lab_analyzer import extract_lab_values, lab_urgency_score
 from ...core.anthropometry import obesity_urgency_score
 from ...core.lifestyle import build_lifestyle_plan, render_plan_text
@@ -112,6 +114,104 @@ def _section_anthropometry():
     }
 
 
+def _section_cloud_sync(patient, patient_id) -> None:
+    """
+    Carga bajo demanda desde la nube, junto a la subida manual de fichero.
+
+    Apple Health no tiene API: la app del movil (Health Auto Export) deja los
+    JSON en una carpeta de Dropbox y aqui se leen cuando hace falta.
+    """
+    source = DropboxSource(
+        folder=cfg.wearable_sync.folder,
+        extensions=tuple(cfg.wearable_sync.extensions),
+    )
+
+    st.markdown("**O carga los datos guardados en la nube**")
+
+    if not source.is_configured():
+        with st.expander("Carga automatica desde Dropbox (sin configurar)"):
+            faltan = ", ".join(source.missing_config()) or "las credenciales de Dropbox"
+            st.caption(
+                f"Falta definir {faltan} en el fichero .env. Con eso, la app "
+                "Health Auto Export del iPhone deja los JSON en una carpeta de "
+                "Dropbox y TAPIA los carga con un boton, sin subir ficheros a mano."
+            )
+            st.markdown(
+                "1. Crea una app en dropbox.com/developers (acceso *App folder*, "
+                "permisos `files.metadata.read` y `files.content.read`).\n"
+                "2. Genera un token de refresco y ponlo en `.env`.\n"
+                "3. En Health Auto Export, crea una automatizacion que exporte "
+                "a esa carpeta en formato JSON con agregacion diaria."
+            )
+        return
+
+    estado = None
+    if patient_id:
+        try:
+            estado = db.get_sync_state(patient_id, source.NAME)
+        except Exception:
+            estado = None
+
+    col_btn, col_info = st.columns([2, 3])
+    with col_btn:
+        pulsado = st.button(
+            "Cargar desde Dropbox",
+            use_container_width=True,
+            disabled=not patient_name,
+            help=("Descarga los ficheros nuevos que haya dejado el movil. "
+                  "Solo se importan los dias que falten."),
+        )
+        releer = st.checkbox(
+            "Releer todo el historial", value=False,
+            help="Vuelve a procesar todos los ficheros, no solo los nuevos.",
+        )
+    with col_info:
+        if not patient_name:
+            st.caption("Escribe el nombre del paciente para poder cargar sus datos.")
+        elif estado and estado.get("last_sync_at"):
+            st.caption(
+                f"Ultima sincronizacion: {estado['last_sync_at'][:16].replace('T', ' ')}"
+                + (f" | ultimo fichero: {estado['last_file']}" if estado.get("last_file") else "")
+            )
+        else:
+            st.caption("Este paciente no se ha sincronizado todavia con Dropbox.")
+
+    if not pulsado:
+        return
+
+    if not patient_name:
+        st.warning("Indica primero el nombre del paciente.")
+        return
+
+    try:
+        pid = patient_id or db.get_or_create_patient(patient_name, patient.age, patient.sex)
+    except Exception as e:
+        st.error(f"No se pudo identificar al paciente: {e}")
+        return
+
+    with st.spinner("Descargando datos desde Dropbox..."):
+        resultado = sync_patient(
+            pid, source=source, full=releer, max_files=cfg.wearable_sync.max_files,
+        )
+
+    for error in resultado.errors:
+        st.warning(error)
+
+    if resultado.days_inserted:
+        st.success(resultado.summary())
+        log(
+            Action.WEARABLE_IMPORT,
+            patient_id=pid,
+            source=source.NAME,
+            details=(f"ficheros={resultado.files_imported};"
+                     f"dias_nuevos={resultado.days_inserted};"
+                     f"formatos={','.join(resultado.adapters) or 'N/D'}"),
+        )
+        st.rerun()
+    elif not resultado.errors:
+        st.info(resultado.summary())
+
+
 def _section_wearable(patient):
     """
     Sube el JSON, lo importa en la BD de forma incremental,
@@ -167,6 +267,8 @@ def _section_wearable(patient):
                     )
         except Exception:
             pass
+
+    _section_cloud_sync(patient, patient_id)
 
     if uploaded is None:
         # Si no sube fichero pero hay historial, usar el historial

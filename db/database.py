@@ -179,6 +179,20 @@ def init_db() -> None:
             "ON lifestyle_plans(patient_id, created_at)"
         )
 
+        # Estado de sincronizacion con origenes en la nube (Dropbox...)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wearable_sync_state (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id     INTEGER NOT NULL REFERENCES patients(id),
+                source         TEXT    NOT NULL,   -- dropbox, ...
+                last_sync_at   TEXT    NOT NULL,
+                last_modified  TEXT,               -- marca del ultimo fichero leido
+                last_file      TEXT,
+                files_imported INTEGER DEFAULT 0,
+                UNIQUE(patient_id, source)
+            )
+        """)
+
     logger.debug("Base de datos inicializada en %s", _DB_PATH)
 
 
@@ -527,6 +541,7 @@ def delete_patient_data(patient_id: int) -> Dict[str, int]:
         l = conn.execute("DELETE FROM lab_results    WHERE patient_id = ?", (patient_id,)).rowcount
         a = conn.execute("DELETE FROM anthropometry  WHERE patient_id = ?", (patient_id,)).rowcount
         p = conn.execute("DELETE FROM lifestyle_plans WHERE patient_id = ?", (patient_id,)).rowcount
+        conn.execute("DELETE FROM wearable_sync_state WHERE patient_id = ?", (patient_id,))
         conn.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
     return {
         "triages": t, "wearable_days": w, "lab_results": l,
@@ -719,3 +734,47 @@ def delete_lifestyle_plan(plan_id: int) -> bool:
     with _connect() as conn:
         cur = conn.execute("DELETE FROM lifestyle_plans WHERE id = ?", (plan_id,))
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Sincronizacion con origenes en la nube
+# ---------------------------------------------------------------------------
+
+def get_sync_state(patient_id: int, source: str) -> Optional[Dict[str, Any]]:
+    """Estado de la ultima sincronizacion del paciente con ese origen."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM wearable_sync_state WHERE patient_id = ? AND source = ?",
+            (patient_id, source),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_sync_state(
+    patient_id: int,
+    source: str,
+    last_modified: Optional[str] = None,
+    last_file: Optional[str] = None,
+    files_imported: int = 0,
+) -> None:
+    """
+    Registra una sincronizacion. `files_imported` es acumulativo y
+    `last_modified` solo avanza (nunca retrocede a una marca anterior).
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO wearable_sync_state
+                 (patient_id, source, last_sync_at, last_modified, last_file, files_imported)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(patient_id, source) DO UPDATE SET
+                 last_sync_at   = excluded.last_sync_at,
+                 last_modified  = MAX(
+                     COALESCE(excluded.last_modified, ''),
+                     COALESCE(wearable_sync_state.last_modified, '')
+                 ),
+                 last_file      = COALESCE(excluded.last_file, wearable_sync_state.last_file),
+                 files_imported = wearable_sync_state.files_imported + excluded.files_imported""",
+            (patient_id, source, now, last_modified, last_file, files_imported),
+        )
+    logger.debug("Sincronizacion registrada: patient_id=%s source=%s", patient_id, source)

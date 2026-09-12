@@ -90,6 +90,15 @@ wearable:
     resp_rate:   "respiraciones_por_min_media"
     hrv:         "hrv_sdnn_ms_media"
 
+# --- Sincronización del wearable desde la nube ---
+# Apple Health no tiene API: una app del móvil (Health Auto Export y
+# similares) deja los JSON en esta carpeta y TAPIA los lee bajo demanda.
+wearable_sync:
+  provider: "dropbox"         # de momento solo "dropbox"
+  folder: ""                  # carpeta de la app en Dropbox ("" = raíz)
+  extensions: [".json"]       # extensiones que se consideran
+  max_files_per_sync: 30      # tope por pulsación del botón
+
 # --- PDF ---
 pdf:
   margins_cm: 2
