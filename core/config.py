@@ -119,6 +119,15 @@ class _Scoring:
     exercise_low:            int = _deep_get(_raw, "scoring", "exercise_days", "low", default=1)
 
 
+class _Lifestyle:
+    aerobic_min_week:        int = _deep_get(_raw, "lifestyle", "aerobic_min_week",        default=150)
+    aerobic_min_week_weight: int = _deep_get(_raw, "lifestyle", "aerobic_min_week_weight", default=300)
+    strength_days:           int = _deep_get(_raw, "lifestyle", "strength_days",           default=2)
+    balance_days_65:         int = _deep_get(_raw, "lifestyle", "balance_days_65",         default=3)
+    min_kcal_male:           int = _deep_get(_raw, "lifestyle", "min_kcal_male",           default=1500)
+    min_kcal_female:         int = _deep_get(_raw, "lifestyle", "min_kcal_female",         default=1200)
+
+
 class _AI:
     provider:               str  = _deep_get(_raw, "ai", "provider", default="openai")
     openai_models:          list = _deep_get(_raw, "ai", "openai_models", default=["gpt-4o-mini", "gpt-4o"])
@@ -157,6 +166,7 @@ class Config:
     thresholds = _Thresholds()
     urgency    = _Urgency()
     scoring    = _Scoring()
+    lifestyle  = _Lifestyle()
     ai         = _AI()
     wearable   = _Wearable()
 

@@ -170,7 +170,7 @@ class TestChartData:
         assert "fecha"     in df.columns
         assert "fc"        in df.columns
         assert "pasos"     in df.columns
-        assert "sueño"     in df.columns
+        assert "sueno"     in df.columns
         assert "ejercicio" in df.columns
         assert len(df) == 10
 
@@ -208,4 +208,95 @@ class TestChartData:
         df = _build_dataframe(records)
         assert pd.api.types.is_numeric_dtype(df["fc"])
         assert pd.api.types.is_numeric_dtype(df["pasos"])
-        assert pd.api.types.is_numeric_dtype(df["sueño"])
+        assert pd.api.types.is_numeric_dtype(df["sueno"])
+
+
+# ---------------------------------------------------------------------------
+# Tests: flujo de la pagina "Plan de salud" (sin UI)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def lifestyle_db(tmp_path, monkeypatch):
+    """Base de datos temporal aislada para el flujo del plan."""
+    import tapia.db.database as database_module
+    monkeypatch.setattr(database_module, "_DB_PATH", tmp_path / "test_lifestyle.db")
+    database_module.init_db()
+    return database_module
+
+
+class TestLifestylePageFlow:
+    """Simula lo que hace page_lifestyle.run() internamente."""
+
+    def _seed(self, db, steps=3500, ex_min=8, sleep=5.4):
+        patient_id = db.get_or_create_patient("Luis Prueba", 58, "M")
+        db.import_wearable_records(patient_id, _make_records(40, sleep=sleep, steps=steps, hr=72))
+        db.save_lab_result(
+            patient_id,
+            raw_json='{"bioquimica": {"glucosa_mg_dl": 132, "colesterol_ldl_mg_dl": 172}}',
+            fecha="2026-01-15",
+        )
+        db.save_anthropometry(
+            patient_id, weight_kg=101.0, height_cm=176.0, waist_cm=114.0,
+            bmi=32.6, bmi_category="Obesidad grado I", waist_category="Riesgo muy aumentado",
+        )
+        return patient_id
+
+    def _plan_for(self, db, patient_id):
+        from tapia.core.lifestyle import build_lifestyle_plan
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+
+        w30, _ = _wearable_summary(patient_id, days=30)
+        anthro  = db.get_latest_anthropometry(patient_id)
+        lab     = db.get_latest_lab(patient_id)
+        return build_lifestyle_plan(
+            patient={"name": "Luis Prueba", "age": 58, "sex": "M"},
+            q={"diet_style": "mediterranea", "other_notes": "hipertension",
+               "exercise_days_last_weeks": 1},
+            anthro=anthro,
+            w30=w30,
+            lab_data=(lab or {}).get("data"),
+            final_bucket="7_dias",
+        ), w30
+
+    def test_wearable_summary_from_db(self, lifestyle_db):
+        patient_id = self._seed(lifestyle_db)
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+        w30, total = _wearable_summary(patient_id, days=30)
+        assert total == 40
+        assert w30 is not None and w30.days <= 31
+        assert w30.avg_steps == pytest.approx(3500, abs=1)
+
+    def test_sin_wearable_devuelve_none(self, lifestyle_db):
+        patient_id = lifestyle_db.get_or_create_patient("Sin Datos", 40, "F")
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+        w30, total = _wearable_summary(patient_id, days=30)
+        assert (w30, total) == (None, 0)
+
+    def test_plan_usa_wearable_antropometria_y_analisis(self, lifestyle_db):
+        patient_id = self._seed(lifestyle_db)
+        plan, w30 = self._plan_for(lifestyle_db, patient_id)
+
+        assert plan.nutrition.energy.objective == "perder_peso"
+        assert plan.exercise.baseline_steps == pytest.approx(3500, abs=1)
+        assert any("diabetic" in p.lower() for p in plan.nutrition.priorities)
+        assert any("colesterol" in p.lower() for p in plan.nutrition.priorities)
+        assert any("hipertension" in r.lower() for r in plan.exercise.restrictions)
+
+    def test_plan_se_guarda_y_se_recupera(self, lifestyle_db):
+        from tapia.core.lifestyle import render_plan_text
+        patient_id = self._seed(lifestyle_db)
+        plan, _ = self._plan_for(lifestyle_db, patient_id)
+
+        lifestyle_db.save_lifestyle_plan(
+            patient_id=patient_id,
+            plan_text=render_plan_text(plan),
+            objective=plan.nutrition.energy.objective,
+            target_kcal=plan.nutrition.energy.target_kcal,
+            weekly_min=plan.exercise.weekly_min_target,
+            steps_goal=plan.exercise.steps_goal,
+            clearance=plan.medical_clearance,
+        )
+        saved = lifestyle_db.get_latest_lifestyle_plan(patient_id)
+        assert saved["objective"] == "perder_peso"
+        assert saved["target_kcal"] == plan.nutrition.energy.target_kcal
+        assert "PLAN DE ALIMENTACION Y EJERCICIO" in saved["plan_text"]

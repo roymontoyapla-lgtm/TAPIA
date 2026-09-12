@@ -36,6 +36,7 @@ class Action:
     CONSENT_GRANTED  = "consent_granted"
     CONSENT_REVOKED  = "consent_revoked"
     REPORT_DOWNLOADED= "report_downloaded"
+    LIFESTYLE_PLAN   = "lifestyle_plan"
     DB_PURGE         = "db_purge"
 
 

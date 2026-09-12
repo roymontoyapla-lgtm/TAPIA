@@ -137,6 +137,48 @@ def init_db() -> None:
             "ON lab_results(patient_id)"
         )
 
+        # Tabla de antropometria (historico de peso, altura y cintura)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS anthropometry (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id     INTEGER NOT NULL REFERENCES patients(id),
+                fecha          TEXT    NOT NULL,   -- YYYY-MM-DD
+                weight_kg      REAL,
+                height_cm      REAL,
+                waist_cm       REAL,
+                bmi            REAL,
+                bmi_category   TEXT,
+                waist_category TEXT,
+                created_at     TEXT    NOT NULL,
+                UNIQUE(patient_id, fecha)          -- una medida por paciente y dia
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_anthro_patient "
+            "ON anthropometry(patient_id, fecha)"
+        )
+
+        # Tabla de planes de alimentacion y ejercicio
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS lifestyle_plans (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id   INTEGER NOT NULL REFERENCES patients(id),
+                created_at   TEXT    NOT NULL,
+                objective    TEXT,
+                target_kcal  INTEGER,
+                weekly_min   INTEGER,
+                steps_goal   INTEGER,
+                clearance    INTEGER DEFAULT 0,
+                plan_text    TEXT    NOT NULL,     -- cifrado
+                ai_text      TEXT,                 -- cifrado (vacio si no se uso IA)
+                ai_model     TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lifestyle_patient "
+            "ON lifestyle_plans(patient_id, created_at)"
+        )
+
     logger.debug("Base de datos inicializada en %s", _DB_PATH)
 
 
@@ -477,12 +519,19 @@ def delete_all() -> int:
 
 
 def delete_patient_data(patient_id: int) -> Dict[str, int]:
-    """Elimina todos los datos de un paciente (triajes + wearable)."""
+    """Elimina todos los datos de un paciente (triajes, wearable, analisis,
+    antropometria y planes de estilo de vida)."""
     with _connect() as conn:
-        t = conn.execute("DELETE FROM triages      WHERE patient_id = ?", (patient_id,)).rowcount
-        w = conn.execute("DELETE FROM wearable_data WHERE patient_id = ?", (patient_id,)).rowcount
+        t = conn.execute("DELETE FROM triages        WHERE patient_id = ?", (patient_id,)).rowcount
+        w = conn.execute("DELETE FROM wearable_data  WHERE patient_id = ?", (patient_id,)).rowcount
+        l = conn.execute("DELETE FROM lab_results    WHERE patient_id = ?", (patient_id,)).rowcount
+        a = conn.execute("DELETE FROM anthropometry  WHERE patient_id = ?", (patient_id,)).rowcount
+        p = conn.execute("DELETE FROM lifestyle_plans WHERE patient_id = ?", (patient_id,)).rowcount
         conn.execute("DELETE FROM patients WHERE id = ?", (patient_id,))
-    return {"triages": t, "wearable_days": w}
+    return {
+        "triages": t, "wearable_days": w, "lab_results": l,
+        "anthropometry": a, "lifestyle_plans": p,
+    }
 
 
 def db_path() -> str:
@@ -547,3 +596,126 @@ def get_latest_lab(patient_id: int) -> Optional[Dict[str, Any]]:
     """Devuelve el analisis mas reciente de un paciente."""
     results = get_lab_results(patient_id)
     return results[0] if results else None
+
+
+# ---------------------------------------------------------------------------
+# Antropometria
+# ---------------------------------------------------------------------------
+
+def save_anthropometry(
+    patient_id: int,
+    weight_kg: Optional[float] = None,
+    height_cm: Optional[float] = None,
+    waist_cm: Optional[float] = None,
+    bmi: Optional[float] = None,
+    bmi_category: str = "",
+    waist_category: str = "",
+    fecha: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Guarda (o actualiza) la medida antropometrica de un paciente para un dia.
+    Si no hay ningun valor no se guarda nada y devuelve None.
+    """
+    if weight_kg is None and height_cm is None and waist_cm is None:
+        return None
+
+    now   = datetime.now().isoformat(timespec="seconds")
+    fecha = fecha or now[:10]
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO anthropometry
+                 (patient_id, fecha, weight_kg, height_cm, waist_cm,
+                  bmi, bmi_category, waist_category, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(patient_id, fecha) DO UPDATE SET
+                 weight_kg      = COALESCE(excluded.weight_kg,  anthropometry.weight_kg),
+                 height_cm      = COALESCE(excluded.height_cm,  anthropometry.height_cm),
+                 waist_cm       = COALESCE(excluded.waist_cm,   anthropometry.waist_cm),
+                 bmi            = COALESCE(excluded.bmi,        anthropometry.bmi),
+                 bmi_category   = excluded.bmi_category,
+                 waist_category = excluded.waist_category,
+                 created_at     = excluded.created_at""",
+            (patient_id, fecha, weight_kg, height_cm, waist_cm,
+             bmi, bmi_category, waist_category, now),
+        )
+    logger.debug("Antropometria guardada para patient_id=%s (%s)", patient_id, fecha)
+    return cur.lastrowid
+
+
+def get_anthropometry_history(patient_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """Historico antropometrico del paciente, de mas reciente a mas antiguo."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM anthropometry WHERE patient_id = ? "
+            "ORDER BY fecha DESC LIMIT ?",
+            (patient_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_latest_anthropometry(patient_id: int) -> Optional[Dict[str, Any]]:
+    """Ultima medida antropometrica registrada del paciente."""
+    history = get_anthropometry_history(patient_id, limit=1)
+    return history[0] if history else None
+
+
+# ---------------------------------------------------------------------------
+# Planes de alimentacion y ejercicio
+# ---------------------------------------------------------------------------
+
+def save_lifestyle_plan(
+    patient_id: int,
+    plan_text: str,
+    objective: str = "",
+    target_kcal: Optional[int] = None,
+    weekly_min: Optional[int] = None,
+    steps_goal: Optional[int] = None,
+    clearance: bool = False,
+    ai_text: str = "",
+    ai_model: str = "",
+) -> int:
+    """Guarda un plan de estilo de vida. El texto se almacena cifrado."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO lifestyle_plans
+                 (patient_id, created_at, objective, target_kcal, weekly_min,
+                  steps_goal, clearance, plan_text, ai_text, ai_model)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (patient_id, now, objective, target_kcal, weekly_min, steps_goal,
+             1 if clearance else 0, encrypt(plan_text),
+             encrypt(ai_text) if ai_text else "", ai_model),
+        )
+    logger.info("Plan de estilo de vida guardado para patient_id=%s", patient_id)
+    return cur.lastrowid
+
+
+def get_lifestyle_plans(patient_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    """Planes de estilo de vida del paciente, del mas reciente al mas antiguo."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM lifestyle_plans WHERE patient_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (patient_id, limit),
+        ).fetchall()
+    plans = []
+    for r in rows:
+        d = dict(r)
+        d["plan_text"] = _safe_decrypt(d.get("plan_text") or "")
+        d["ai_text"]   = _safe_decrypt(d["ai_text"]) if d.get("ai_text") else ""
+        d["clearance"] = bool(d.get("clearance"))
+        plans.append(d)
+    return plans
+
+
+def get_latest_lifestyle_plan(patient_id: int) -> Optional[Dict[str, Any]]:
+    """Ultimo plan de estilo de vida guardado para el paciente."""
+    plans = get_lifestyle_plans(patient_id, limit=1)
+    return plans[0] if plans else None
+
+
+def delete_lifestyle_plan(plan_id: int) -> bool:
+    """Elimina un plan de estilo de vida por id."""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM lifestyle_plans WHERE id = ?", (plan_id,))
+    return cur.rowcount > 0

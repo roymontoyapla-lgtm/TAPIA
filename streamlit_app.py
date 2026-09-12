@@ -81,6 +81,7 @@ from tapia.ui.streamlit_pages import (
 )
 from tapia.ui.streamlit_pages.page_users import run as page_users_run
 from tapia.ui.streamlit_pages.page_patient_report import run as page_patient_report_run
+from tapia.ui.streamlit_pages.page_lifestyle import run as page_lifestyle_run
 
 role      = st.session_state.get("role", "consultor")
 full_name = st.session_state.get("full_name", "Usuario")
@@ -94,6 +95,7 @@ all_pages = {
     "Historial BD":     (page_db_history.run,    "db_history"),
     "Cumplimiento":     (page_compliance.run,    "compliance"),
     "Informe integral": (page_patient_report_run, "patients"),
+    "Plan de salud":    (page_lifestyle_run,      "lifestyle"),
     "Usuarios":         (page_users_run,          "manage_users"),
     "Acerca de":        (page_about.run,         "about"),
 }

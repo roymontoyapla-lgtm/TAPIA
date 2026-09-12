@@ -36,11 +36,11 @@ ROLES = {
 PERMISSIONS = {
     "admin": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about", "manage_users",
+        "compliance", "about", "manage_users", "lifestyle",
     },
     "medico": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about",
+        "compliance", "about", "lifestyle",
     },
     "consultor": {
         "history", "db_history", "about",

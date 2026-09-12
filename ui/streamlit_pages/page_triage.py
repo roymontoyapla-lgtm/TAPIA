@@ -23,6 +23,7 @@ from ...export.pdf import REPORTLAB_OK, save_pdf
 from ...wearables.detector import load_and_detect, ADAPTER_NAMES
 from ...core.lab_analyzer import extract_lab_values, lab_urgency_score
 from ...core.anthropometry import obesity_urgency_score
+from ...core.lifestyle import build_lifestyle_plan, render_plan_text
 from ...db.database import save_lab_result, get_latest_lab
 from ...wearables.adapter_apple_xml import AppleHealthXMLAdapter
 from ...compliance.audit import init_audit_table, log, Action
@@ -265,11 +266,66 @@ def _preview_wearable(w) -> None:
     )
 
 
+def _lifestyle_tab(plan) -> None:
+    """Resumen del plan de alimentacion y ejercicio dentro del triaje."""
+    if plan is None:
+        st.info("No se ha podido calcular el plan con los datos disponibles.")
+        return
+
+    n, e = plan.nutrition, plan.exercise
+    en   = n.energy
+
+    if plan.medical_clearance:
+        st.error(
+            "Requiere autorizacion medica antes de iniciar el programa de ejercicio. "
+            "Hasta entonces, solo actividad ligera."
+        )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ingesta objetivo",
+              f"{en.target_kcal} kcal/dia" if en.target_kcal else "N/D",
+              en.objective_label, delta_color="off")
+    c2.metric("Ejercicio objetivo", f"{e.weekly_min_target} min/sem",
+              f"inicio: {e.weekly_min_start} min/sem", delta_color="off")
+    c3.metric("Pasos objetivo", f"{e.steps_goal}/dia",
+              f"actual: {e.baseline_steps}" if e.baseline_steps is not None else "sin wearable",
+              delta_color="off")
+
+    cA, cB = st.columns(2)
+    with cA:
+        st.markdown("**Alimentacion**")
+        st.caption(n.pattern)
+        for p in n.priorities[:4]:
+            st.markdown(f"- {p}")
+    with cB:
+        st.markdown("**Ejercicio**")
+        st.caption(f"Intensidad: {e.intensity}")
+        for p in e.progression[:4]:
+            st.markdown(f"- {p}")
+
+    if plan.cautions:
+        st.markdown("**Avisos de seguridad**")
+        for c in plan.cautions:
+            st.warning(c)
+
+    st.markdown("**Objetivos**")
+    for g in plan.goals[:6]:
+        st.markdown(f"- {g}")
+
+    st.caption(
+        "Plan orientativo segun las directrices de la OMS. "
+        "En la pagina 'Plan de salud' puede ampliarse, redactarse con IA y descargarse."
+    )
+    with st.expander("Ver el plan completo"):
+        st.code(render_plan_text(plan), language=None)
+
+
 def _section_result(patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos,
                     ai, final_bucket, report,
                     lab_data=None, lab_score=0,
-                    anthro_data=None, obesity_score=0) -> None:
+                    anthro_data=None, obesity_score=0,
+                    lifestyle_plan=None) -> None:
     st.divider()
     st.subheader("Resultado del triaje")
     _urgency_badge(final_bucket)
@@ -294,9 +350,9 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
         st.metric("Puntuacion", local_score,
                   delta=URGENCY_LABELS[local_bucket], delta_color="off")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Motivos de score", "Justificacion IA", "Analisis clinico",
-        "Antropometria", "Informe completo",
+        "Antropometria", "Plan de salud", "Informe completo",
     ])
     with tab1:
         st.markdown("**Factores del score:**")
@@ -373,6 +429,9 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
             st.info("No se introdujeron datos antropometricos en este triaje.")
 
     with tab5:
+        _lifestyle_tab(lifestyle_plan)
+
+    with tab6:
         st.code(report, language=None)
 
     st.divider()
@@ -565,6 +624,43 @@ def run() -> None:
                     anthro=anthro_data,
                 )
 
+                # Guardar la antropometria en el historico del paciente
+                if patient_id:
+                    db.save_anthropometry(
+                        patient_id=patient_id,
+                        weight_kg=anthro_data.get("weight_kg"),
+                        height_cm=anthro_data.get("height_cm"),
+                        waist_cm=anthro_data.get("waist_cm"),
+                        bmi=anthro_data.get("bmi"),
+                        bmi_category=anthro_data.get("bmi_category", ""),
+                        waist_category=anthro_data.get("waist_category", ""),
+                    )
+
+                # Plan de alimentacion y ejercicio (calculo deterministico)
+                try:
+                    lifestyle_plan = build_lifestyle_plan(
+                        patient=patient, q=q, anthro=anthro_data, w30=w30,
+                        lab_data=lab_data or None, final_bucket=final_bucket,
+                    )
+                    # Solo se archiva el plan si hay antropometria: sin peso ni
+                    # altura el plan es generico y no aporta historico.
+                    has_anthro = any(
+                        anthro_data.get(k) for k in ("weight_kg", "height_cm", "waist_cm")
+                    )
+                    if patient_id and has_anthro:
+                        db.save_lifestyle_plan(
+                            patient_id=patient_id,
+                            plan_text=render_plan_text(lifestyle_plan),
+                            objective=lifestyle_plan.nutrition.energy.objective,
+                            target_kcal=lifestyle_plan.nutrition.energy.target_kcal,
+                            weekly_min=lifestyle_plan.exercise.weekly_min_target,
+                            steps_goal=lifestyle_plan.exercise.steps_goal,
+                            clearance=lifestyle_plan.medical_clearance,
+                        )
+                except Exception as e:
+                    lifestyle_plan = None
+                    st.warning(f"No se pudo calcular el plan de alimentacion y ejercicio: {e}")
+
                 save_triage(TriageRecord(
                     timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
                     patient_name=patient.name, patient_age=patient.age, patient_sex=patient.sex,
@@ -594,6 +690,7 @@ def run() -> None:
                     local_bucket, local_score, local_motivos, ai, final_bucket, report,
                     lab_data=lab_data, lab_score=lab_score,
                     anthro_data=anthro_data, obesity_score=obesity_score,
+                    lifestyle_plan=lifestyle_plan,
                 )
             except Exception as e:
                 st.error(f"Error durante el triaje: {e}")
