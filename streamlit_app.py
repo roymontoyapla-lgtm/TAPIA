@@ -4,13 +4,25 @@ TAPIA - Streamlit entry point.
 Ejecutar con:  streamlit run streamlit_app.py
 """
 
-import sys
 import base64
+import importlib.util
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# El codigo importa con `tapia.core...`, pero el directorio clonado puede
+# llamarse TAPIA, tapia-main o cualquier otra cosa segun el despliegue.
+# Se registra esta carpeta como el paquete `tapia` antes de nada.
+ROOT = Path(__file__).resolve().parent
+
+if "tapia" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(
+        "tapia",
+        ROOT / "__init__.py",
+        submodule_search_locations=[str(ROOT)],
+    )
+    _module = importlib.util.module_from_spec(_spec)
+    sys.modules["tapia"] = _module
+    _spec.loader.exec_module(_module)
 
 import streamlit as st
 from tapia.core.config import cfg

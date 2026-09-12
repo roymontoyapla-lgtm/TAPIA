@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "tapia"
@@ -35,6 +35,21 @@ tapia-desktop = "tapia.main:main"  # interfaz Tkinter
 testpaths = ["tests"]
 addopts   = "-v --tb=short"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["tapia*"]
+# La raiz del repositorio ES el paquete `tapia` (no hay subcarpeta tapia/),
+# asi que se mapea explicitamente en lugar de autodetectar.
+[tool.setuptools]
+packages = [
+    "tapia",
+    "tapia.ai",
+    "tapia.auth",
+    "tapia.compliance",
+    "tapia.core",
+    "tapia.db",
+    "tapia.export",
+    "tapia.ui",
+    "tapia.ui.streamlit_pages",
+    "tapia.wearables",
+]
+
+[tool.setuptools.package-dir]
+"tapia" = "."
