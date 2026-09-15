@@ -89,7 +89,8 @@ genérico**, con `TapiaAdapter` de último recurso. Al añadir uno:
 `wearables/cloud.py` (Dropbox sobre `requests`, sin SDK) + `wearables/sync.py`
 orquestan la carga bajo demanda; el estado vive en `wearable_sync_state` para no
 redescargar. Apple Health no tiene API: los JSON los deja una app del móvil en Dropbox.
-Credenciales por `.env` (ver `.env.example`).
+Credenciales por `.env` (ver `.env.example`); `scripts/dropbox_setup.py` hace el flujo
+OAuth y las escribe.
 
 ### Persistencia y cifrado
 
