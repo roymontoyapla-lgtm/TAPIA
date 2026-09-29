@@ -79,6 +79,68 @@ class TestEnv:
 
 
 # ---------------------------------------------------------------------------
+# Dependencias
+# ---------------------------------------------------------------------------
+
+class TestRequirements:
+    """
+    La comprobacion tiene que ir ANTES de pedir credenciales: el codigo de
+    autorizacion es de un solo uso y fallar despues obliga a repetirlo todo.
+    """
+
+    def test_no_falla_si_requests_esta(self, setup_mod):
+        setup_mod.check_requirements()      # no debe lanzar
+
+    def test_avisa_con_el_comando_de_instalacion(self, setup_mod, monkeypatch):
+        monkeypatch.setattr(setup_mod.importlib.util, "find_spec", lambda nombre: None)
+        with pytest.raises(SystemExit, match="pip install requests"):
+            setup_mod.check_requirements()
+
+    def test_se_comprueba_antes_de_pedir_nada(self, setup_mod, monkeypatch):
+        """main() aborta sin llegar al input si falta la dependencia."""
+        monkeypatch.setattr(setup_mod.importlib.util, "find_spec", lambda nombre: None)
+        monkeypatch.setattr(setup_mod, "read_env", lambda *a, **k: pytest.fail(
+            "no debe leerse el .env ni pedir credenciales sin requests"
+        ))
+        monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("no debe pedir nada"))
+        monkeypatch.setattr(sys, "argv", ["dropbox_setup.py"])
+        with pytest.raises(SystemExit):
+            setup_mod.main()
+
+
+# ---------------------------------------------------------------------------
+# Validacion de lo pegado
+# ---------------------------------------------------------------------------
+
+class TestValidateCode:
+    """
+    Confundir el App secret con el codigo de autorizacion es el error tipico.
+    Se corta antes del canje para no gastar el codigo ni dar un error opaco.
+    """
+
+    CODIGO_REAL = "GKIQ7HCoovgAAAAAAAAHDPMxKVLXHbKIgINngcsZ9jQ"
+
+    def test_acepta_un_codigo_real(self, setup_mod):
+        setup_mod.validate_code(self.CODIGO_REAL, "9twcst90vsi76dd", "abcdef123456789")
+
+    def test_rechaza_la_app_key(self, setup_mod):
+        with pytest.raises(SystemExit, match="App key"):
+            setup_mod.validate_code("9twcst90vsi76dd", "9twcst90vsi76dd", "otrosecreto1234")
+
+    def test_rechaza_el_app_secret(self, setup_mod):
+        with pytest.raises(SystemExit, match="App secret"):
+            setup_mod.validate_code("abcdef123456789", "9twcst90vsi76dd", "abcdef123456789")
+
+    def test_rechaza_algo_con_pinta_de_credencial(self, setup_mod):
+        """Aunque no coincida con las credenciales de esta ejecucion."""
+        with pytest.raises(SystemExit, match="15 caracteres"):
+            setup_mod.validate_code("abc123xyz456def", "", "")
+
+    def test_no_confunde_un_codigo_corto_con_mayusculas(self, setup_mod):
+        setup_mod.validate_code("ABC123def456ghi", "", "")
+
+
+# ---------------------------------------------------------------------------
 # Canje del codigo
 # ---------------------------------------------------------------------------
 

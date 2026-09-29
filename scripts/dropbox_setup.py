@@ -91,8 +91,59 @@ def write_env(nuevos: Dict[str, str], path: Path = ENV_PATH) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dependencias
+# ---------------------------------------------------------------------------
+
+def check_requirements() -> None:
+    """
+    Comprueba `requests` ANTES de pedir nada.
+
+    El codigo de autorizacion es de un solo uso: si esto fallara al canjear,
+    habria que repetir toda la autorizacion desde el navegador.
+    """
+    if importlib.util.find_spec("requests") is None:
+        raise SystemExit(
+            "\nFalta la libreria 'requests'. Instalala y vuelve a ejecutar:\n\n"
+            "    python -m pip install requests\n\n"
+            "(o de una vez todas las dependencias del proyecto:\n"
+            "    python -m pip install -r requirements.txt)\n"
+        )
+
+
+# ---------------------------------------------------------------------------
 # OAuth
 # ---------------------------------------------------------------------------
+
+# La App key y el App secret son 15 caracteres en minuscula; el codigo de
+# autorizacion es mucho mas largo y mezcla mayusculas. Confundirlos es el
+# error tipico, asi que se corta antes de gastar el canje.
+_CREDENCIAL_PANEL = re.compile(r"^[a-z0-9]{15}$")
+
+
+def validate_code(code: str, app_key: str = "", app_secret: str = "") -> None:
+    """Aborta si lo pegado no parece un codigo de autorizacion."""
+    if code and code == app_key:
+        raise SystemExit(
+            "\nEso es tu App key, no el codigo de autorizacion.\n"
+            "El codigo sale en el navegador despues de pulsar 'Permitir'.\n"
+        )
+    if code and code == app_secret:
+        raise SystemExit(
+            "\nEso es tu App secret, no el codigo de autorizacion.\n"
+            "Regeneralo en dropbox.com/developers/apps si lo has pegado en algun\n"
+            "sitio visible, y copia el codigo que sale en el navegador tras\n"
+            "pulsar 'Permitir'.\n"
+        )
+    if _CREDENCIAL_PANEL.match(code):
+        raise SystemExit(
+            "\nEsto parece una credencial del panel de Dropbox (15 caracteres),\n"
+            "no un codigo de autorizacion.\n\n"
+            "  App key / App secret : 15 caracteres, todo en minuscula\n"
+            "  Codigo de autorizacion: mucho mas largo, mezcla mayusculas\n\n"
+            "Abre la URL de autorizacion, pulsa 'Permitir' y copia la cadena\n"
+            "larga que aparece en la caja 'Codigo de acceso generado'.\n"
+        )
+
 
 def exchange_code(app_key: str, app_secret: str, code: str) -> Dict[str, str]:
     """Canjea el codigo de autorizacion por un token de refresco."""
@@ -177,6 +228,7 @@ def main() -> None:
                         help="Solo imprime el token, no toca el .env")
     args = parser.parse_args()
 
+    check_requirements()
     env = read_env()
 
     print("\n=== Alta del acceso a Dropbox para TAPIA ===\n")
@@ -210,6 +262,8 @@ def main() -> None:
     encontrado = re.search(r"auth_code=([^&\s]+)", code)
     if encontrado:
         code = encontrado.group(1)
+
+    validate_code(code, app_key, app_secret)
 
     print("\nCanjeando el codigo...")
     datos = exchange_code(app_key, app_secret, code)
