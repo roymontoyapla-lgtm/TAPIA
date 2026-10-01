@@ -300,3 +300,98 @@ class TestLifestylePageFlow:
         assert saved["objective"] == "perder_peso"
         assert saved["target_kcal"] == plan.nutrition.energy.target_kcal
         assert "PLAN DE ALIMENTACION Y EJERCICIO" in saved["plan_text"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: boton de carga desde Dropbox (sin UI real)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_st(monkeypatch):
+    """
+    Sustituye streamlit dentro de page_triage para poder ejecutar la funcion
+    de la pagina. Sin esto, un fallo tonto (una variable sin definir) solo
+    aparece al abrir la aplicacion.
+    """
+    from unittest.mock import MagicMock
+    from tapia.ui.streamlit_pages import page_triage
+
+    st = MagicMock()
+    st.columns.return_value = (MagicMock(), MagicMock())
+    st.button.return_value = False
+    st.checkbox.return_value = False
+    monkeypatch.setattr(page_triage, "st", st)
+    return st
+
+
+def _fake_dropbox(monkeypatch, configurado=True):
+    from unittest.mock import MagicMock
+    from tapia.ui.streamlit_pages import page_triage
+
+    source = MagicMock()
+    source.NAME = "dropbox"
+    source.is_configured.return_value = configurado
+    source.missing_config.return_value = [] if configurado else ["DROPBOX_APP_KEY"]
+    monkeypatch.setattr(page_triage, "DropboxSource", lambda **kw: source)
+    return source
+
+
+class TestBotonDropbox:
+
+    def _patient(self, nombre="Luis Prueba"):
+        return PatientInfo(name=nombre, age=58, sex="M")
+
+    def test_sin_configurar_solo_explica_como_hacerlo(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        llamadas = []
+        monkeypatch.setattr(page_triage, "sync_patient",
+                            lambda *a, **k: llamadas.append(a))
+        _fake_dropbox(monkeypatch, configurado=False)
+
+        page_triage._section_cloud_sync(self._patient(), None)
+
+        fake_st.expander.assert_called_once()
+        fake_st.button.assert_not_called()
+        assert llamadas == []
+
+    def test_sin_nombre_de_paciente_el_boton_esta_deshabilitado(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        _fake_dropbox(monkeypatch)
+
+        page_triage._section_cloud_sync(self._patient(nombre=""), None)
+
+        assert fake_st.button.call_args.kwargs["disabled"] is True
+
+    def test_con_nombre_el_boton_esta_activo(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        _fake_dropbox(monkeypatch)
+
+        page_triage._section_cloud_sync(self._patient(), 7)
+
+        assert fake_st.button.call_args.kwargs["disabled"] is False
+
+    def test_al_pulsar_sincroniza_ese_paciente(self, fake_st, monkeypatch):
+        from unittest.mock import MagicMock
+        from tapia.ui.streamlit_pages import page_triage
+        from tapia.wearables.sync import SyncResult
+
+        source = _fake_dropbox(monkeypatch)
+        fake_st.button.return_value = True
+        monkeypatch.setattr(page_triage.db, "get_sync_state", lambda *a, **k: None)
+        monkeypatch.setattr(page_triage, "log", MagicMock())
+
+        recogido = {}
+
+        def _sync(pid, **kwargs):
+            recogido["pid"] = pid
+            recogido.update(kwargs)
+            return SyncResult(files_seen=1, files_imported=1, days_inserted=3)
+
+        monkeypatch.setattr(page_triage, "sync_patient", _sync)
+
+        page_triage._section_cloud_sync(self._patient(), 7)
+
+        assert recogido["pid"] == 7
+        assert recogido["source"] is source
+        assert recogido["full"] is False
+        fake_st.rerun.assert_called_once()

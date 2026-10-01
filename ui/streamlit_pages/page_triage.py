@@ -121,6 +121,8 @@ def _section_cloud_sync(patient, patient_id) -> None:
     Apple Health no tiene API: la app del movil (Health Auto Export) deja los
     JSON en una carpeta de Dropbox y aqui se leen cuando hace falta.
     """
+    patient_name = (getattr(patient, "name", "") or "").strip()
+
     source = DropboxSource(
         folder=cfg.wearable_sync.folder,
         extensions=tuple(cfg.wearable_sync.extensions),
