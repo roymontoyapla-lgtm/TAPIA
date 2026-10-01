@@ -85,11 +85,86 @@ def describe_metrics(datos: Any) -> List[str]:
     return lineas
 
 
+def describe_apple_xml(crudo: bytes, days: int = 180) -> List[str]:
+    """
+    Recorre el XML de Apple Health y cuenta que tipos de registro trae y de
+    que fechas, que es lo unico que explica un 'SI -> 0 dias'.
+
+    Streaming: no carga el arbol en memoria (estos ficheros pasan del GB).
+    """
+    import xml.etree.ElementTree as ET
+    from collections import Counter
+    from datetime import datetime, timedelta
+
+    from tapia.wearables.adapter_apple_xml import (
+        _RECORD_TYPES, _SLEEP_ASLEEP, _SLEEP_TYPE, _open_xml_stream,
+    )
+
+    corte = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    tipos:     Counter = Counter()
+    recientes: Counter = Counter()
+    etiquetas: Counter = Counter()
+    fechas:    List[str] = []
+    total = 0
+
+    try:
+        contexto = ET.iterparse(_open_xml_stream(crudo), events=("end",))
+        for _, elem in contexto:
+            etiquetas[elem.tag] += 1
+            if elem.tag == "Record":
+                total += 1
+                tipo = elem.get("type", "")
+                dia  = (elem.get("startDate", "") or "")[:10]
+                tipos[tipo] += 1
+                if dia:
+                    if not fechas:
+                        fechas = [dia, dia]
+                    else:
+                        fechas[0] = min(fechas[0], dia)
+                        fechas[1] = max(fechas[1], dia)
+                    if dia >= corte:
+                        recientes[tipo] += 1
+            elem.clear()
+    except Exception as e:
+        return ["", f"Error recorriendo el XML: {type(e).__name__}: {e}"]
+
+    lineas = ["", f"Elementos del XML: " +
+              ", ".join(f"{t}={n}" for t, n in etiquetas.most_common(5))]
+    lineas.append(f"Registros <Record>: {total:,}")
+    if fechas:
+        lineas.append(f"Rango de fechas: {fechas[0]} a {fechas[1]}")
+    lineas.append(f"Ventana analizada: ultimos {days} dias (desde {corte})")
+
+    interesantes = set(_RECORD_TYPES) | {_SLEEP_TYPE}
+    lineas.append("\nTipos que TAPIA busca:")
+    for tipo in sorted(interesantes):
+        lineas.append(
+            f"  {tipo:<52} total={tipos.get(tipo, 0):>9,} "
+            f"en ventana={recientes.get(tipo, 0):>9,}"
+        )
+
+    otros = [(t, n) for t, n in tipos.most_common(12) if t not in interesantes]
+    if otros:
+        lineas.append("\nOtros tipos presentes (los 12 mas frecuentes):")
+        for tipo, n in otros:
+            lineas.append(f"  {tipo:<52} {n:>9,}")
+
+    if total and not any(recientes.get(t) for t in interesantes):
+        lineas.append(
+            "\n  >> Hay registros, pero ninguno de los tipos que TAPIA usa "
+            "cae dentro de la ventana."
+        )
+    return lineas
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Diagnostica un fichero de wearable que TAPIA no lee."
     )
     parser.add_argument("fichero", help="Ruta al JSON (o XML/ZIP) exportado")
+    parser.add_argument("--dias", type=int, default=180,
+                        help="Ventana a analizar en el XML de Apple (por defecto 180)")
     args = parser.parse_args()
 
     ruta = Path(args.fichero)
@@ -109,7 +184,11 @@ def main() -> None:
         print(f"No es JSON ({e}); se trata como XML/ZIP de Apple Health.")
         datos = crudo
 
-    if not isinstance(datos, (bytes, bytearray)):
+    if isinstance(datos, (bytes, bytearray)):
+        print("Recorriendo el XML, puede tardar varios minutos...")
+        for linea in describe_apple_xml(datos, days=args.dias):
+            print(linea)
+    else:
         for linea in describe_payload(datos):
             print(linea)
         for linea in describe_metrics(datos):
@@ -128,6 +207,12 @@ def main() -> None:
             continue
 
         alguno = True
+        if isinstance(datos, (bytes, bytearray)):
+            # Ya se ha recorrido arriba; volver a parsear un XML de 1 GB
+            # costaria otros tantos minutos sin aportar nada.
+            print(f"  {adaptador.NAME:<22} SI (ver el recuento de arriba)")
+            continue
+
         try:
             registros = adaptador.normalize(datos)
         except Exception as e:
