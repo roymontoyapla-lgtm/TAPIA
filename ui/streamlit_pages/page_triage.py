@@ -304,7 +304,10 @@ def _section_wearable(patient):
             new_records, adapter_name = load_and_detect(raw_bytes)
 
         if not new_records:
-            st.error("El fichero no contiene registros validos.")
+            # El XML de Apple sabe explicar por que salio vacio (ventana de
+            # fechas, o tipos que no usamos); el mensaje generico no ayuda.
+            motivo = xml_adapter.explain_empty() if is_apple_hf else ""
+            st.error(motivo or "El fichero no contiene registros validos.")
             return None, None, None, None, patient_id
 
         # Importacion incremental en BD

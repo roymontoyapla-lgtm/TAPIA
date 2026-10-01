@@ -271,3 +271,80 @@ class TestDetector:
     def test_load_and_detect_invalid_json(self):
         with pytest.raises(ValueError, match="JSON valido"):
             load_and_detect(b"esto no es json")
+
+
+# ---------------------------------------------------------------------------
+# Apple Health XML: explicar un resultado vacio
+# ---------------------------------------------------------------------------
+
+class TestAppleXMLExplicaVacio:
+    """
+    Un export de hace meses produce cero dias y el usuario no tiene forma de
+    saber por que. El adaptador guarda el recuento de la ultima pasada para
+    poder decirselo sin releer un fichero de varios GB.
+    """
+
+    @staticmethod
+    def _xml(*filas: str) -> bytes:
+        cuerpo = "\n".join(filas)
+        return (f'<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<HealthData locale="es_ES">\n{cuerpo}\n</HealthData>\n').encode("utf-8")
+
+    @staticmethod
+    def _record(dias_atras: int, tipo: str = "HKQuantityTypeIdentifierStepCount") -> str:
+        from datetime import datetime, timedelta
+        d = (datetime.now() - timedelta(days=dias_atras)).strftime("%Y-%m-%d %H:%M:%S +0200")
+        return (f'<Record type="{tipo}" sourceName="Apple Watch" '
+                f'startDate="{d}" endDate="{d}" value="1200"/>')
+
+    def _adapter(self):
+        from tapia.wearables.adapter_apple_xml import AppleHealthXMLAdapter
+        return AppleHealthXMLAdapter()
+
+    def test_sin_explicacion_cuando_hay_datos(self):
+        adaptador = self._adapter()
+        registros = adaptador.normalize(self._xml(self._record(5)), days=180)
+        assert len(registros) == 1
+        assert adaptador.explain_empty() == ""
+
+    def test_explica_que_los_datos_son_anteriores_a_la_ventana(self):
+        """El caso real: export guardado hace mas de un ano."""
+        adaptador = self._adapter()
+        registros = adaptador.normalize(self._xml(self._record(500), self._record(501)), days=180)
+        assert registros == []
+
+        motivo = adaptador.explain_empty()
+        assert "2 registros" in motivo
+        assert "mas reciente" in motivo
+        assert "Dias a importar" in motivo
+
+    def test_sugiere_una_ventana_que_alcance(self):
+        adaptador = self._adapter()
+        adaptador.normalize(self._xml(self._record(300)), days=180)
+        motivo = adaptador.explain_empty()
+        # 300 dias de antiguedad + margen, dentro del maximo que admite la UI
+        assert "330" in motivo
+
+    def test_la_sugerencia_no_pasa_del_maximo_de_la_interfaz(self):
+        adaptador = self._adapter()
+        adaptador.normalize(self._xml(self._record(2000)), days=180)
+        assert "730" in adaptador.explain_empty()
+
+    def test_explica_un_fichero_sin_registros(self):
+        adaptador = self._adapter()
+        adaptador.normalize(self._xml(), days=180)
+        assert "no contiene registros" in adaptador.explain_empty().lower()
+
+    def test_explica_que_faltan_los_tipos_necesarios(self):
+        adaptador = self._adapter()
+        adaptador.normalize(
+            self._xml(self._record(5, "HKQuantityTypeIdentifierDietaryWater")), days=180
+        )
+        motivo = adaptador.explain_empty()
+        assert "ninguno de los tipos" in motivo
+
+    def test_guarda_el_recuento_de_la_ultima_pasada(self):
+        adaptador = self._adapter()
+        adaptador.normalize(self._xml(self._record(5), self._record(400)), days=180)
+        assert adaptador.last_scan["total_records"] == 2
+        assert adaptador.last_scan["days_found"] == 1

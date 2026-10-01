@@ -64,8 +64,14 @@ class AppleHealthXMLAdapter(BaseAdapter):
         """
         Parsea el XML (o el XML dentro del ZIP) por streaming y devuelve
         registros normalizados. Solo incluye los ultimos `days` dias.
+
+        Deja en `self.last_scan` el recuento de lo que vio (registros totales
+        y fecha del mas reciente) para poder explicar un resultado vacio sin
+        tener que recorrer otra vez un fichero de varios GB.
         """
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        total_records = 0
+        last_date = ""
         daily  = defaultdict(lambda: {
             "hrs": [], "steps": [], "exercise": [],
             "resps": [], "hrvs": [], "sleep_h": 0.0,
@@ -81,6 +87,10 @@ class AppleHealthXMLAdapter(BaseAdapter):
 
             rtype = elem.get("type", "")
             start = elem.get("startDate", "")[:10]
+
+            total_records += 1
+            if start > last_date:
+                last_date = start
 
             if start < cutoff:
                 elem.clear()
@@ -110,8 +120,47 @@ class AppleHealthXMLAdapter(BaseAdapter):
 
             elem.clear()
 
-        return [_to_record(fecha, d) for fecha in sorted(daily.keys())
-                if (d := daily[fecha])]
+        registros = [_to_record(fecha, d) for fecha in sorted(daily.keys())
+                     if (d := daily[fecha])]
+
+        self.last_scan = {
+            "total_records": total_records,
+            "last_date":     last_date,
+            "cutoff":        cutoff,
+            "days":          days,
+            "days_found":    len(registros),
+        }
+        return registros
+
+    def explain_empty(self) -> str:
+        """
+        Explica por que el ultimo `normalize` no saco ningun dia.
+        Devuelve "" si no hay nada que explicar.
+        """
+        scan = getattr(self, "last_scan", None)
+        if not scan or scan["days_found"]:
+            return ""
+
+        if not scan["total_records"]:
+            return ("El fichero no contiene registros de Apple Health. "
+                    "Asegurate de exportar desde Salud > tu perfil > Exportar todos los datos.")
+
+        if scan["last_date"] and scan["last_date"] < scan["cutoff"]:
+            faltan = _days_since(scan["last_date"])
+            sugeridos = min(730, max(30, faltan + 30))
+            return (
+                f"El fichero tiene {scan['total_records']:,} registros, pero el mas "
+                f"reciente es del {scan['last_date']} y solo se importan los ultimos "
+                f"{scan['days']} dias (desde {scan['cutoff']}).\n\n"
+                f"Sube 'Dias a importar' a {sugeridos} y vuelve a subir el fichero, "
+                "o exporta de nuevo desde el iPhone para tener datos actuales."
+            )
+
+        return (
+            f"El fichero tiene {scan['total_records']:,} registros en la ventana pedida, "
+            "pero ninguno de los tipos que TAPIA necesita (pasos, frecuencia cardiaca en "
+            "reposo, sueno, ejercicio, HRV o frecuencia respiratoria)."
+        )
 
 
 def _find_health_xml_in_zip(zip_bytes: bytes) -> Optional[str]:
@@ -151,6 +200,15 @@ def _open_xml_stream(data: bytes):
             raise ValueError("El ZIP no contiene un XML de Apple Health valido.")
         return zf.open(xml_name)
     return io.BytesIO(data)
+
+
+def _days_since(fecha: str) -> int:
+    """Dias transcurridos desde una fecha 'YYYY-MM-DD'. 0 si no se entiende."""
+    try:
+        d = datetime.strptime(fecha, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return 0
+    return max(0, (datetime.now() - d).days)
 
 
 def _duration_hours(start_str: str, end_str: str) -> float:
