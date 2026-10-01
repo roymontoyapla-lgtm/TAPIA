@@ -158,24 +158,71 @@ def describe_apple_xml(crudo: bytes, days: int = 180) -> List[str]:
     return lineas
 
 
+def _ultimo_de_dropbox():
+    """Descarga el fichero mas reciente de la carpeta configurada en Dropbox."""
+    from tapia.core.config import cfg
+    from tapia.wearables.cloud import CloudSourceError, DropboxSource
+
+    source = DropboxSource(
+        folder=cfg.wearable_sync.folder,
+        extensions=tuple(cfg.wearable_sync.extensions),
+    )
+    if not source.is_configured():
+        faltan = ", ".join(source.missing_config()) or "las credenciales de Dropbox"
+        raise SystemExit(
+            f"\nDropbox no esta configurado: falta {faltan} en el .env.\n"
+            "Ejecuta antes: python scripts/dropbox_setup.py\n"
+        )
+
+    carpeta = cfg.wearable_sync.folder or "/ (raiz de la carpeta de la app)"
+    try:
+        ficheros = source.list_files()
+    except CloudSourceError as e:
+        raise SystemExit(f"\n{e}\n")
+
+    if not ficheros:
+        raise SystemExit(
+            f"\nNo hay ficheros en {carpeta}.\n"
+            "Comprueba que la automatizacion de Health Auto Export exporta a la\n"
+            "carpeta de la app (Aplicaciones/<nombre de tu app>) y no a la raiz\n"
+            "de tu Dropbox.\n"
+        )
+
+    print(f"\n{len(ficheros)} fichero(s) en {carpeta}; se analiza el mas reciente:")
+    for f in ficheros[-5:]:
+        print(f"  {f.name}  ({f.modified}, {f.size:,} bytes)")
+
+    ultimo = ficheros[-1]
+    return ultimo.name, source.download(ultimo.path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Diagnostica un fichero de wearable que TAPIA no lee."
     )
-    parser.add_argument("fichero", help="Ruta al JSON (o XML/ZIP) exportado")
+    parser.add_argument("fichero", nargs="?",
+                        help="Ruta al JSON (o XML/ZIP) exportado")
+    parser.add_argument("--dropbox", action="store_true",
+                        help="Analiza el ultimo fichero que haya dejado el movil en Dropbox")
     parser.add_argument("--dias", type=int, default=180,
                         help="Ventana a analizar en el XML de Apple (por defecto 180)")
     args = parser.parse_args()
 
-    ruta = Path(args.fichero)
-    if not ruta.exists():
-        raise SystemExit(f"\nNo existe el fichero: {ruta}\n")
+    if not args.fichero and not args.dropbox:
+        raise SystemExit("\nIndica un fichero, o usa --dropbox para coger el ultimo de la nube.\n")
 
     _bootstrap()
     from tapia.wearables.detector import _ADAPTERS
 
-    crudo = ruta.read_bytes()
-    print(f"\n=== {ruta.name} ({len(crudo):,} bytes) ===\n")
+    if args.dropbox:
+        nombre, crudo = _ultimo_de_dropbox()
+    else:
+        ruta = Path(args.fichero)
+        if not ruta.exists():
+            raise SystemExit(f"\nNo existe el fichero: {ruta}\n")
+        nombre, crudo = ruta.name, ruta.read_bytes()
+
+    print(f"\n=== {nombre} ({len(crudo):,} bytes) ===\n")
 
     try:
         datos: Any = json.loads(crudo.decode("utf-8"))

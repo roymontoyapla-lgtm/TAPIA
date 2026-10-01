@@ -131,3 +131,50 @@ class TestAppleXML:
     def test_no_filtra_valores_de_salud(self, diag):
         salida = "\n".join(diag.describe_apple_xml(_xml(_record(PASOS, 1, valor="98765"))))
         assert "98765" not in salida
+
+
+# ---------------------------------------------------------------------------
+# Modo --dropbox
+# ---------------------------------------------------------------------------
+
+class TestDesdeDropbox:
+    """Coger el ultimo fichero de la nube evita tener que buscarlo a mano."""
+
+    def _source(self, monkeypatch, diag, ficheros, configurado=True):
+        from unittest.mock import MagicMock
+        from tapia.wearables.cloud import CloudFile
+        import tapia.wearables.cloud as cloud_mod
+
+        source = MagicMock()
+        source.NAME = "dropbox"
+        source.is_configured.return_value = configurado
+        source.missing_config.return_value = [] if configurado else ["DROPBOX_APP_KEY"]
+        source.list_files.return_value = [
+            CloudFile(path=f"/{n}", name=n, modified=m, size=10)
+            for n, m in ficheros
+        ]
+        source.download.return_value = b'{"data": {"metrics": []}}'
+        monkeypatch.setattr(cloud_mod, "DropboxSource", lambda **kw: source)
+        return source
+
+    def test_coge_el_mas_reciente(self, diag, monkeypatch):
+        source = self._source(monkeypatch, diag, [
+            ("viejo.json", "2026-09-01T10:00:00Z"),
+            ("nuevo.json", "2026-09-28T10:00:00Z"),
+        ])
+
+        nombre, crudo = diag._ultimo_de_dropbox()
+
+        assert nombre == "nuevo.json"
+        assert crudo == b'{"data": {"metrics": []}}'
+        source.download.assert_called_once_with("/nuevo.json")
+
+    def test_avisa_si_la_carpeta_esta_vacia(self, diag, monkeypatch):
+        self._source(monkeypatch, diag, [])
+        with pytest.raises(SystemExit, match="No hay ficheros"):
+            diag._ultimo_de_dropbox()
+
+    def test_avisa_si_no_hay_credenciales(self, diag, monkeypatch):
+        self._source(monkeypatch, diag, [], configurado=False)
+        with pytest.raises(SystemExit, match="dropbox_setup"):
+            diag._ultimo_de_dropbox()
