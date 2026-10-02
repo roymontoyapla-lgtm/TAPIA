@@ -225,6 +225,45 @@ button[kind="secondary"]:hover {{ background: var(--tapia-fondo-suave) !importan
 }}
 [data-testid="stTabs"] [aria-selected="true"] {{ color: var(--tapia-acento) !important; }}
 
+/* --- Movil ------------------------------------------------------------ */
+/* Streamlit ya apila las columnas solo; aqui se ajustan tamanos y margenes
+   para que quepa el contenido sin zoom. */
+@media (max-width: 640px) {{
+  [data-testid="stAppViewContainer"] .block-container {{
+    padding-top: 1.25rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-bottom: 2.5rem;
+  }}
+  h1 {{ font-size: 1.9rem !important; line-height: 1.15 !important; }}
+  h2 {{ font-size: 1.35rem !important; }}
+  h3 {{ font-size: 1.1rem !important; }}
+
+  [data-testid="stForm"] {{
+    padding: 1rem 1.1rem !important;
+    border-radius: 16px !important;
+  }}
+  [data-testid="stMetric"] {{ padding: 10px 12px; }}
+
+  /* Objetivos comodos para el dedo */
+  .stButton > button,
+  .stDownloadButton > button,
+  [data-testid="stFormSubmitButton"] > button {{
+    width: 100%;
+    min-height: 44px;
+  }}
+  section[data-testid="stSidebar"] label[data-testid="stRadioOption"] {{
+    padding: 12px 14px;
+  }}
+
+  /* Las pestanas del resultado del triaje se desplazan en horizontal */
+  [data-testid="stTabs"] [data-baseweb="tab-list"] {{
+    overflow-x: auto;
+    scrollbar-width: none;
+  }}
+  [data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
+}}
+
 /* --- Varios ----------------------------------------------------------- */
 hr, [data-testid="stDivider"] {{ border-color: var(--tapia-borde) !important; }}
 code, pre, [data-testid="stCode"] {{ border-radius: 12px !important; }}

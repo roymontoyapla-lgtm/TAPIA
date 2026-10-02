@@ -68,6 +68,22 @@ class TestCSS:
         assert "<style>" in escrito["texto"]
 
 
+class TestMovil:
+    """La aplicacion tambien se consulta desde el movil, en la red local."""
+
+    def test_hay_ajustes_para_pantallas_estrechas(self):
+        assert "@media (max-width: 640px)" in theme._css()
+
+    def test_los_botones_son_comodos_para_el_dedo(self):
+        """44 px es el minimo que recomienda Apple para un objetivo tactil."""
+        movil = theme._css().split("@media (max-width: 640px)", 1)[1]
+        assert "min-height: 44px" in movil
+
+    def test_los_titulos_se_reducen_en_movil(self):
+        movil = theme._css().split("@media (max-width: 640px)", 1)[1]
+        assert "font-size: 1.9rem" in movil
+
+
 class TestColoresDeUrgencia:
 
     def test_hay_color_para_cada_prioridad(self):

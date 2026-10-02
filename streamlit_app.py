@@ -31,7 +31,9 @@ st.set_page_config(
     page_title=cfg.app.name,
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto": Streamlit la deja abierta en escritorio y la pliega en el
+    # movil, donde ocuparia toda la pantalla.
+    initial_sidebar_state="auto",
 )
 
 # Tema visual (tipografia, superficies y acentos)
