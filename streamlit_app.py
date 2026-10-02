@@ -34,6 +34,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Tema visual (tipografia, superficies y acentos)
+from tapia.ui.theme import inject as inject_theme
+
+inject_theme()
+
 # Inicializar BD y tablas al arrancar
 from tapia.db import database as db
 from tapia.compliance.audit import init_audit_table
@@ -59,7 +64,12 @@ if not st.session_state.get("authenticated"):
 # ---------------------------------------------------------------------------
 
 def _logo_base64() -> str:
-    logo_path = Path(__file__).resolve().parent / "Tapia_logo.png"
+    """Logo en base64. Prefiere la version sin fondo, que se integra con el
+    gris de la barra lateral; si no esta, usa el PNG original."""
+    raiz = Path(__file__).resolve().parent
+    logo_path = raiz / "Tapia_logo_transparente.png"
+    if not logo_path.exists():
+        logo_path = raiz / "Tapia_logo.png"
     if logo_path.exists():
         with open(logo_path, "rb") as f:
             return base64.b64encode(f.read()).decode()
@@ -68,18 +78,11 @@ def _logo_base64() -> str:
 _logo_b64 = _logo_base64()
 
 def page_header(title: str) -> None:
-    if _logo_b64:
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            st.markdown(
-                f'<img src="data:image/png;base64,{_logo_b64}" '
-                f'style="width:100%;max-width:140px;margin-top:4px;">',
-                unsafe_allow_html=True,
-            )
-        with col2:
-            st.title(title)
-    else:
-        st.title(title)
+    """
+    Titulo de pagina. El logo vive solo en la barra lateral: repetirlo en
+    cada cabecera recargaba la pantalla sin aportar nada.
+    """
+    st.title(title)
 
 st.session_state["page_header"] = page_header
 

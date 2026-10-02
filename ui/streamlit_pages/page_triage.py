@@ -30,23 +30,14 @@ from ...db.database import save_lab_result, get_latest_lab
 from ...wearables.adapter_apple_xml import AppleHealthXMLAdapter
 from ...compliance.audit import init_audit_table, log, Action
 from ..session import TriageRecord, init, save_triage, set_wearable_records
+from ..theme import URGENCIA, urgency_badge_html
 
-_BUCKET_COLOR = {
-    "urgente":   "#c0392b",
-    "7_dias":    "#e67e22",
-    "2_semanas": "#27ae60",
-}
+_BUCKET_COLOR = URGENCIA
 
 
 def _urgency_badge(bucket: str) -> None:
-    color = _BUCKET_COLOR.get(bucket, "#555")
     label = URGENCY_LABELS.get(bucket, bucket)
-    st.markdown(
-        f"""<div style="background:{color};color:white;padding:14px 20px;
-        border-radius:10px;font-size:1.2rem;font-weight:bold;
-        text-align:center;margin:10px 0;">{label}</div>""",
-        unsafe_allow_html=True,
-    )
+    st.markdown(urgency_badge_html(label, bucket), unsafe_allow_html=True)
 
 
 def _section_patient() -> PatientInfo:
