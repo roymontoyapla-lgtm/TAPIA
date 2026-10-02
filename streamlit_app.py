@@ -158,4 +158,17 @@ with st.sidebar:
 # Renderizar pagina seleccionada
 # ---------------------------------------------------------------------------
 
+# Aviso si el usuario admin conserva la clave por defecto antigua, que era
+# publica: no basta con cambiarla en el codigo para las bases ya creadas.
+from tapia.auth.auth import uses_legacy_default_password
+
+try:
+    if uses_legacy_default_password():
+        st.warning(
+            "El usuario **admin** conserva la clave por defecto, que es publica. "
+            "Cambiala en **Usuarios** antes de abrir TAPIA fuera de esta red."
+        )
+except Exception:
+    pass
+
 available[selected]()

@@ -77,8 +77,8 @@ def run() -> bool:
 
         st.divider()
         st.caption(
-            "Primera vez? El usuario por defecto es **admin** y la clave **tapia1234**. "
-            "Cambiala tras el primer acceso."
+            "Primera vez? La clave del usuario **admin** se genera al crear la base "
+            "de datos y se muestra en la consola de arranque."
         )
 
     return False
