@@ -14,11 +14,14 @@ from ...auth.auth import login, init_auth_tables
 
 
 def _logo_html() -> str:
-    logo_path = Path(__file__).resolve().parent.parent.parent / "Tapia_logo.png"
+    raiz = Path(__file__).resolve().parent.parent.parent
+    logo_path = raiz / "Tapia_logo_transparente.png"
+    if not logo_path.exists():
+        logo_path = raiz / "Tapia_logo.png"
     if logo_path.exists():
         with open(logo_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
-        return f'<img src="data:image/png;base64,{b64}" style="width:280px;margin-bottom:16px;">'
+        return f'<img src="data:image/png;base64,{b64}" style="width:220px;margin-bottom:8px;">'
     return "<h1>TAPIA</h1>"
 
 
@@ -37,11 +40,12 @@ def run() -> bool:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown(
-            f'<div style="text-align:center;padding:20px 0;">{_logo_html()}</div>',
+            f'<div style="text-align:center;padding:48px 0 8px;">{_logo_html()}</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<p style="text-align:center;color:#7f8c8d;margin-bottom:24px;">'
+            '<p style="text-align:center;color:#6e6e73;font-size:1.05rem;'
+            'letter-spacing:-.01em;margin-bottom:28px;">'
             'Triaje Automatizado por medio de la Inteligencia Artificial</p>',
             unsafe_allow_html=True,
         )
@@ -73,8 +77,8 @@ def run() -> bool:
 
         st.divider()
         st.caption(
-            "Primera vez? El usuario por defecto es **admin** y la clave **tapia1234**. "
-            "Cambiala tras el primer acceso."
+            "Primera vez? La clave del usuario **admin** se genera al crear la base "
+            "de datos y se muestra en la consola de arranque."
         )
 
     return False

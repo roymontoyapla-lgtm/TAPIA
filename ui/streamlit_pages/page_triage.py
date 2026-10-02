@@ -21,29 +21,23 @@ from ...core.wearable import filter_by_days, summarize
 from ...db import database as db
 from ...export.pdf import REPORTLAB_OK, save_pdf
 from ...wearables.detector import load_and_detect, ADAPTER_NAMES
+from ...wearables.cloud import DropboxSource
+from ...wearables.sync import sync_patient
 from ...core.lab_analyzer import extract_lab_values, lab_urgency_score
 from ...core.anthropometry import obesity_urgency_score
+from ...core.lifestyle import build_lifestyle_plan, render_plan_text
 from ...db.database import save_lab_result, get_latest_lab
 from ...wearables.adapter_apple_xml import AppleHealthXMLAdapter
 from ...compliance.audit import init_audit_table, log, Action
 from ..session import TriageRecord, init, save_triage, set_wearable_records
+from ..theme import URGENCIA, urgency_badge_html
 
-_BUCKET_COLOR = {
-    "urgente":   "#c0392b",
-    "7_dias":    "#e67e22",
-    "2_semanas": "#27ae60",
-}
+_BUCKET_COLOR = URGENCIA
 
 
 def _urgency_badge(bucket: str) -> None:
-    color = _BUCKET_COLOR.get(bucket, "#555")
     label = URGENCY_LABELS.get(bucket, bucket)
-    st.markdown(
-        f"""<div style="background:{color};color:white;padding:14px 20px;
-        border-radius:10px;font-size:1.2rem;font-weight:bold;
-        text-align:center;margin:10px 0;">{label}</div>""",
-        unsafe_allow_html=True,
-    )
+    st.markdown(urgency_badge_html(label, bucket), unsafe_allow_html=True)
 
 
 def _section_patient() -> PatientInfo:
@@ -111,6 +105,106 @@ def _section_anthropometry():
     }
 
 
+def _section_cloud_sync(patient, patient_id) -> None:
+    """
+    Carga bajo demanda desde la nube, junto a la subida manual de fichero.
+
+    Apple Health no tiene API: la app del movil (Health Auto Export) deja los
+    JSON en una carpeta de Dropbox y aqui se leen cuando hace falta.
+    """
+    patient_name = (getattr(patient, "name", "") or "").strip()
+
+    source = DropboxSource(
+        folder=cfg.wearable_sync.folder,
+        extensions=tuple(cfg.wearable_sync.extensions),
+    )
+
+    st.markdown("**O carga los datos guardados en la nube**")
+
+    if not source.is_configured():
+        with st.expander("Carga automatica desde Dropbox (sin configurar)"):
+            faltan = ", ".join(source.missing_config()) or "las credenciales de Dropbox"
+            st.caption(
+                f"Falta definir {faltan} en el fichero .env. Con eso, la app "
+                "Health Auto Export del iPhone deja los JSON en una carpeta de "
+                "Dropbox y TAPIA los carga con un boton, sin subir ficheros a mano."
+            )
+            st.markdown(
+                "1. Crea una app en dropbox.com/developers (acceso *App folder*, "
+                "permisos `files.metadata.read` y `files.content.read`).\n"
+                "2. Genera un token de refresco y ponlo en `.env`.\n"
+                "3. En Health Auto Export, crea una automatizacion que exporte "
+                "a esa carpeta en formato JSON con agregacion diaria."
+            )
+        return
+
+    estado = None
+    if patient_id:
+        try:
+            estado = db.get_sync_state(patient_id, source.NAME)
+        except Exception:
+            estado = None
+
+    col_btn, col_info = st.columns([2, 3])
+    with col_btn:
+        pulsado = st.button(
+            "Cargar desde Dropbox",
+            use_container_width=True,
+            disabled=not patient_name,
+            help=("Descarga los ficheros nuevos que haya dejado el movil. "
+                  "Solo se importan los dias que falten."),
+        )
+        releer = st.checkbox(
+            "Releer todo el historial", value=False,
+            help="Vuelve a procesar todos los ficheros, no solo los nuevos.",
+        )
+    with col_info:
+        if not patient_name:
+            st.caption("Escribe el nombre del paciente para poder cargar sus datos.")
+        elif estado and estado.get("last_sync_at"):
+            st.caption(
+                f"Ultima sincronizacion: {estado['last_sync_at'][:16].replace('T', ' ')}"
+                + (f" | ultimo fichero: {estado['last_file']}" if estado.get("last_file") else "")
+            )
+        else:
+            st.caption("Este paciente no se ha sincronizado todavia con Dropbox.")
+
+    if not pulsado:
+        return
+
+    if not patient_name:
+        st.warning("Indica primero el nombre del paciente.")
+        return
+
+    try:
+        pid = patient_id or db.get_or_create_patient(patient_name, patient.age, patient.sex)
+    except Exception as e:
+        st.error(f"No se pudo identificar al paciente: {e}")
+        return
+
+    with st.spinner("Descargando datos desde Dropbox..."):
+        resultado = sync_patient(
+            pid, source=source, full=releer, max_files=cfg.wearable_sync.max_files,
+        )
+
+    for error in resultado.errors:
+        st.warning(error)
+
+    if resultado.days_inserted:
+        st.success(resultado.summary())
+        log(
+            Action.WEARABLE_IMPORT,
+            patient_id=pid,
+            source=source.NAME,
+            details=(f"ficheros={resultado.files_imported};"
+                     f"dias_nuevos={resultado.days_inserted};"
+                     f"formatos={','.join(resultado.adapters) or 'N/D'}"),
+        )
+        st.rerun()
+    elif not resultado.errors:
+        st.info(resultado.summary())
+
+
 def _section_wearable(patient):
     """
     Sube el JSON, lo importa en la BD de forma incremental,
@@ -167,6 +261,8 @@ def _section_wearable(patient):
         except Exception:
             pass
 
+    _section_cloud_sync(patient, patient_id)
+
     if uploaded is None:
         # Si no sube fichero pero hay historial, usar el historial
         if patient_id:
@@ -199,7 +295,10 @@ def _section_wearable(patient):
             new_records, adapter_name = load_and_detect(raw_bytes)
 
         if not new_records:
-            st.error("El fichero no contiene registros validos.")
+            # El XML de Apple sabe explicar por que salio vacio (ventana de
+            # fechas, o tipos que no usamos); el mensaje generico no ayuda.
+            motivo = xml_adapter.explain_empty() if is_apple_hf else ""
+            st.error(motivo or "El fichero no contiene registros validos.")
             return None, None, None, None, patient_id
 
         # Importacion incremental en BD
@@ -265,11 +364,66 @@ def _preview_wearable(w) -> None:
     )
 
 
+def _lifestyle_tab(plan) -> None:
+    """Resumen del plan de alimentacion y ejercicio dentro del triaje."""
+    if plan is None:
+        st.info("No se ha podido calcular el plan con los datos disponibles.")
+        return
+
+    n, e = plan.nutrition, plan.exercise
+    en   = n.energy
+
+    if plan.medical_clearance:
+        st.error(
+            "Requiere autorizacion medica antes de iniciar el programa de ejercicio. "
+            "Hasta entonces, solo actividad ligera."
+        )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ingesta objetivo",
+              f"{en.target_kcal} kcal/dia" if en.target_kcal else "N/D",
+              en.objective_label, delta_color="off")
+    c2.metric("Ejercicio objetivo", f"{e.weekly_min_target} min/sem",
+              f"inicio: {e.weekly_min_start} min/sem", delta_color="off")
+    c3.metric("Pasos objetivo", f"{e.steps_goal}/dia",
+              f"actual: {e.baseline_steps}" if e.baseline_steps is not None else "sin wearable",
+              delta_color="off")
+
+    cA, cB = st.columns(2)
+    with cA:
+        st.markdown("**Alimentacion**")
+        st.caption(n.pattern)
+        for p in n.priorities[:4]:
+            st.markdown(f"- {p}")
+    with cB:
+        st.markdown("**Ejercicio**")
+        st.caption(f"Intensidad: {e.intensity}")
+        for p in e.progression[:4]:
+            st.markdown(f"- {p}")
+
+    if plan.cautions:
+        st.markdown("**Avisos de seguridad**")
+        for c in plan.cautions:
+            st.warning(c)
+
+    st.markdown("**Objetivos**")
+    for g in plan.goals[:6]:
+        st.markdown(f"- {g}")
+
+    st.caption(
+        "Plan orientativo segun las directrices de la OMS. "
+        "En la pagina 'Plan de salud' puede ampliarse, redactarse con IA y descargarse."
+    )
+    with st.expander("Ver el plan completo"):
+        st.code(render_plan_text(plan), language=None)
+
+
 def _section_result(patient, q, w30, w56, rec, spec, reasons,
                     local_bucket, local_score, local_motivos,
                     ai, final_bucket, report,
                     lab_data=None, lab_score=0,
-                    anthro_data=None, obesity_score=0) -> None:
+                    anthro_data=None, obesity_score=0,
+                    lifestyle_plan=None) -> None:
     st.divider()
     st.subheader("Resultado del triaje")
     _urgency_badge(final_bucket)
@@ -294,9 +448,9 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
         st.metric("Puntuacion", local_score,
                   delta=URGENCY_LABELS[local_bucket], delta_color="off")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Motivos de score", "Justificacion IA", "Analisis clinico",
-        "Antropometria", "Informe completo",
+        "Antropometria", "Plan de salud", "Informe completo",
     ])
     with tab1:
         st.markdown("**Factores del score:**")
@@ -373,6 +527,9 @@ def _section_result(patient, q, w30, w56, rec, spec, reasons,
             st.info("No se introdujeron datos antropometricos en este triaje.")
 
     with tab5:
+        _lifestyle_tab(lifestyle_plan)
+
+    with tab6:
         st.code(report, language=None)
 
     st.divider()
@@ -565,6 +722,43 @@ def run() -> None:
                     anthro=anthro_data,
                 )
 
+                # Guardar la antropometria en el historico del paciente
+                if patient_id:
+                    db.save_anthropometry(
+                        patient_id=patient_id,
+                        weight_kg=anthro_data.get("weight_kg"),
+                        height_cm=anthro_data.get("height_cm"),
+                        waist_cm=anthro_data.get("waist_cm"),
+                        bmi=anthro_data.get("bmi"),
+                        bmi_category=anthro_data.get("bmi_category", ""),
+                        waist_category=anthro_data.get("waist_category", ""),
+                    )
+
+                # Plan de alimentacion y ejercicio (calculo deterministico)
+                try:
+                    lifestyle_plan = build_lifestyle_plan(
+                        patient=patient, q=q, anthro=anthro_data, w30=w30,
+                        lab_data=lab_data or None, final_bucket=final_bucket,
+                    )
+                    # Solo se archiva el plan si hay antropometria: sin peso ni
+                    # altura el plan es generico y no aporta historico.
+                    has_anthro = any(
+                        anthro_data.get(k) for k in ("weight_kg", "height_cm", "waist_cm")
+                    )
+                    if patient_id and has_anthro:
+                        db.save_lifestyle_plan(
+                            patient_id=patient_id,
+                            plan_text=render_plan_text(lifestyle_plan),
+                            objective=lifestyle_plan.nutrition.energy.objective,
+                            target_kcal=lifestyle_plan.nutrition.energy.target_kcal,
+                            weekly_min=lifestyle_plan.exercise.weekly_min_target,
+                            steps_goal=lifestyle_plan.exercise.steps_goal,
+                            clearance=lifestyle_plan.medical_clearance,
+                        )
+                except Exception as e:
+                    lifestyle_plan = None
+                    st.warning(f"No se pudo calcular el plan de alimentacion y ejercicio: {e}")
+
                 save_triage(TriageRecord(
                     timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
                     patient_name=patient.name, patient_age=patient.age, patient_sex=patient.sex,
@@ -594,6 +788,7 @@ def run() -> None:
                     local_bucket, local_score, local_motivos, ai, final_bucket, report,
                     lab_data=lab_data, lab_score=lab_score,
                     anthro_data=anthro_data, obesity_score=obesity_score,
+                    lifestyle_plan=lifestyle_plan,
                 )
             except Exception as e:
                 st.error(f"Error durante el triaje: {e}")

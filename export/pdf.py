@@ -193,8 +193,15 @@ def save_pdf(
     w30_data: Dict[str, Any] = None,
     reasons: list = None,
     local_motivos: list = None,
+    show_urgency: bool = True,
+    section_title: str = "Informe completo",
 ) -> None:
-    """Genera el PDF mejorado con cabecera, semaforo y tabla de metricas."""
+    """
+    Genera el PDF con cabecera, semaforo y tabla de metricas.
+
+    `show_urgency=False` omite el semaforo de urgencia, para documentos que
+    no son un triaje (por ejemplo el plan de alimentacion y ejercicio).
+    """
     if not REPORTLAB_OK:
         raise RuntimeError("ReportLab no esta instalado.\nInstala con: pip install reportlab")
 
@@ -215,8 +222,9 @@ def save_pdf(
     # Cabecera
     elements += _header(styles, patient_name, patient_age, patient_sex)
 
-    # Semaforo de urgencia
-    elements += _urgency_badge(styles, final_bucket, local_score, local_bucket, ai_bucket)
+    # Semaforo de urgencia (solo en informes de triaje)
+    if show_urgency:
+        elements += _urgency_badge(styles, final_bucket, local_score, local_bucket, ai_bucket)
 
     # Tabla de metricas wearable
     if w30_data:
@@ -247,7 +255,7 @@ def save_pdf(
     # Informe completo
     elements.append(HRFlowable(width="100%", thickness=0.5, color=_GRAY))
     elements.append(Spacer(1, 0.2*cm))
-    elements.append(Paragraph("Informe completo", styles["section"]))
+    elements.append(Paragraph(section_title, styles["section"]))
 
     def esc(s):
         return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")

@@ -4,13 +4,25 @@ TAPIA - Streamlit entry point.
 Ejecutar con:  streamlit run streamlit_app.py
 """
 
-import sys
 import base64
+import importlib.util
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# El codigo importa con `tapia.core...`, pero el directorio clonado puede
+# llamarse TAPIA, tapia-main o cualquier otra cosa segun el despliegue.
+# Se registra esta carpeta como el paquete `tapia` antes de nada.
+ROOT = Path(__file__).resolve().parent
+
+if "tapia" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(
+        "tapia",
+        ROOT / "__init__.py",
+        submodule_search_locations=[str(ROOT)],
+    )
+    _module = importlib.util.module_from_spec(_spec)
+    sys.modules["tapia"] = _module
+    _spec.loader.exec_module(_module)
 
 import streamlit as st
 from tapia.core.config import cfg
@@ -19,8 +31,15 @@ st.set_page_config(
     page_title=cfg.app.name,
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto": Streamlit la deja abierta en escritorio y la pliega en el
+    # movil, donde ocuparia toda la pantalla.
+    initial_sidebar_state="auto",
 )
+
+# Tema visual (tipografia, superficies y acentos)
+from tapia.ui.theme import inject as inject_theme
+
+inject_theme()
 
 # Inicializar BD y tablas al arrancar
 from tapia.db import database as db
@@ -47,7 +66,12 @@ if not st.session_state.get("authenticated"):
 # ---------------------------------------------------------------------------
 
 def _logo_base64() -> str:
-    logo_path = Path(__file__).resolve().parent / "Tapia_logo.png"
+    """Logo en base64. Prefiere la version sin fondo, que se integra con el
+    gris de la barra lateral; si no esta, usa el PNG original."""
+    raiz = Path(__file__).resolve().parent
+    logo_path = raiz / "Tapia_logo_transparente.png"
+    if not logo_path.exists():
+        logo_path = raiz / "Tapia_logo.png"
     if logo_path.exists():
         with open(logo_path, "rb") as f:
             return base64.b64encode(f.read()).decode()
@@ -56,18 +80,11 @@ def _logo_base64() -> str:
 _logo_b64 = _logo_base64()
 
 def page_header(title: str) -> None:
-    if _logo_b64:
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            st.markdown(
-                f'<img src="data:image/png;base64,{_logo_b64}" '
-                f'style="width:100%;max-width:140px;margin-top:4px;">',
-                unsafe_allow_html=True,
-            )
-        with col2:
-            st.title(title)
-    else:
-        st.title(title)
+    """
+    Titulo de pagina. El logo vive solo en la barra lateral: repetirlo en
+    cada cabecera recargaba la pantalla sin aportar nada.
+    """
+    st.title(title)
 
 st.session_state["page_header"] = page_header
 
@@ -81,6 +98,7 @@ from tapia.ui.streamlit_pages import (
 )
 from tapia.ui.streamlit_pages.page_users import run as page_users_run
 from tapia.ui.streamlit_pages.page_patient_report import run as page_patient_report_run
+from tapia.ui.streamlit_pages.page_lifestyle import run as page_lifestyle_run
 
 role      = st.session_state.get("role", "consultor")
 full_name = st.session_state.get("full_name", "Usuario")
@@ -94,6 +112,7 @@ all_pages = {
     "Historial BD":     (page_db_history.run,    "db_history"),
     "Cumplimiento":     (page_compliance.run,    "compliance"),
     "Informe integral": (page_patient_report_run, "patients"),
+    "Plan de salud":    (page_lifestyle_run,      "lifestyle"),
     "Usuarios":         (page_users_run,          "manage_users"),
     "Acerca de":        (page_about.run,         "about"),
 }
@@ -138,5 +157,18 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Renderizar pagina seleccionada
 # ---------------------------------------------------------------------------
+
+# Aviso si el usuario admin conserva la clave por defecto antigua, que era
+# publica: no basta con cambiarla en el codigo para las bases ya creadas.
+from tapia.auth.auth import uses_legacy_default_password
+
+try:
+    if uses_legacy_default_password():
+        st.warning(
+            "El usuario **admin** conserva la clave por defecto, que es publica. "
+            "Cambiala en **Usuarios** antes de abrir TAPIA fuera de esta red."
+        )
+except Exception:
+    pass
 
 available[selected]()

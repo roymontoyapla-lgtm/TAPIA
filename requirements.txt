@@ -8,3 +8,4 @@ pillow>=10.0
 plotly>=5.0
 pandas>=2.0
 cryptography>=41.0
+requests>=2.31

@@ -5,7 +5,8 @@ enableCORS = false
 enableXsrfProtection = true
 
 [theme]
-primaryColor = "#2c3e50"
+primaryColor = "#0071e3"              # azul de accion
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f4f8"
-textColor = "#1a1a2e"
+secondaryBackgroundColor = "#f5f5f7"  # gris de la barra lateral
+textColor = "#1d1d1f"
+font = "sans serif"

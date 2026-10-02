@@ -36,11 +36,11 @@ ROLES = {
 PERMISSIONS = {
     "admin": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about", "manage_users",
+        "compliance", "about", "manage_users", "lifestyle",
     },
     "medico": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about",
+        "compliance", "about", "lifestyle",
     },
     "consultor": {
         "history", "db_history", "about",
@@ -101,13 +101,55 @@ def init_auth_tables() -> None:
     logger.debug("Tablas de autenticacion inicializadas.")
 
 
+# Clave que se creaba por defecto en versiones anteriores. Figuraba en el
+# codigo (publico) y en la propia pantalla de login, asi que no era secreta.
+# Se conserva solo para poder avisar a quien siga usandola.
+LEGACY_DEFAULT_PASSWORD = "tapia1234"
+
+
 def _ensure_default_admin() -> None:
-    """Crea el usuario admin por defecto si la tabla esta vacia."""
+    """
+    Crea el usuario admin la primera vez, si no hay ninguno.
+
+    La clave sale de TAPIA_ADMIN_PASSWORD. Si esa variable no esta definida
+    se genera una aleatoria y se escribe en el log de arranque: antes habia
+    una fija en el codigo, que al ser el repositorio publico equivalia a no
+    tener contrasena.
+    """
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        if count == 0:
-            _create_user_internal(conn, "admin", "tapia1234", "admin", "Administrador")
-            logger.info("Usuario admin por defecto creado (usuario: admin, clave: tapia1234)")
+        if count:
+            return
+
+        desde_entorno = os.getenv("TAPIA_ADMIN_PASSWORD", "").strip()
+        password = desde_entorno or secrets.token_urlsafe(12)
+        _create_user_internal(conn, "admin", password, "admin", "Administrador")
+
+    if desde_entorno:
+        logger.info("Usuario admin creado con la clave de TAPIA_ADMIN_PASSWORD.")
+    else:
+        # Se muestra una unica vez, al crear la base de datos
+        logger.warning(
+            "\n%s\n  Usuario admin creado.\n"
+            "    usuario: admin\n"
+            "    clave  : %s\n"
+            "  Anotala y cambiala desde la pagina Usuarios.\n%s",
+            "=" * 60, password, "=" * 60,
+        )
+
+
+def uses_legacy_default_password(username: str = "admin") -> bool:
+    """
+    Indica si ese usuario conserva la clave por defecto antigua, para poder
+    avisarlo en la interfaz. Devuelve False si el usuario no existe.
+    """
+    with _connect() as conn:
+        fila = conn.execute(
+            "SELECT password_hash, salt FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    if not fila:
+        return False
+    return _verify_password(LEGACY_DEFAULT_PASSWORD, fila["salt"], fila["password_hash"])
 
 
 def _create_user_internal(

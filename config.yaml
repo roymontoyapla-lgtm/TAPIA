@@ -57,6 +57,15 @@ scoring:
     very_low: 2   # <= 1 día
     low: 1        # <= 3 días
 
+# --- Plan de alimentación y ejercicio ---
+lifestyle:
+  aerobic_min_week: 150         # Objetivo OMS de actividad aeróbica moderada
+  aerobic_min_week_weight: 300  # Objetivo si hay sobrepeso/obesidad
+  strength_days: 2              # Días de fuerza por semana (OMS)
+  balance_days_65: 3            # Días de equilibrio a partir de 65 años
+  min_kcal_male: 1500           # Suelo calórico de seguridad (hombre)
+  min_kcal_female: 1200         # Suelo calórico de seguridad (mujer)
+
 # --- IA ---
 ai:
   provider: "anthropic"          # "openai" | "anthropic" | "disabled"
@@ -80,6 +89,15 @@ wearable:
     sleep_h:     "sueno_asleep_horas"
     resp_rate:   "respiraciones_por_min_media"
     hrv:         "hrv_sdnn_ms_media"
+
+# --- Sincronización del wearable desde la nube ---
+# Apple Health no tiene API: una app del móvil (Health Auto Export y
+# similares) deja los JSON en esta carpeta y TAPIA los lee bajo demanda.
+wearable_sync:
+  provider: "dropbox"         # de momento solo "dropbox"
+  folder: ""                  # carpeta de la app en Dropbox ("" = raíz)
+  extensions: [".json"]       # extensiones que se consideran
+  max_files_per_sync: 30      # tope por pulsación del botón
 
 # --- PDF ---
 pdf:
