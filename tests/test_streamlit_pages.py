@@ -170,7 +170,7 @@ class TestChartData:
         assert "fecha"     in df.columns
         assert "fc"        in df.columns
         assert "pasos"     in df.columns
-        assert "sueño"     in df.columns
+        assert "sueno"     in df.columns
         assert "ejercicio" in df.columns
         assert len(df) == 10
 
@@ -208,4 +208,190 @@ class TestChartData:
         df = _build_dataframe(records)
         assert pd.api.types.is_numeric_dtype(df["fc"])
         assert pd.api.types.is_numeric_dtype(df["pasos"])
-        assert pd.api.types.is_numeric_dtype(df["sueño"])
+        assert pd.api.types.is_numeric_dtype(df["sueno"])
+
+
+# ---------------------------------------------------------------------------
+# Tests: flujo de la pagina "Plan de salud" (sin UI)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def lifestyle_db(tmp_path, monkeypatch):
+    """Base de datos temporal aislada para el flujo del plan."""
+    import tapia.db.database as database_module
+    monkeypatch.setattr(database_module, "_DB_PATH", tmp_path / "test_lifestyle.db")
+    database_module.init_db()
+    return database_module
+
+
+class TestLifestylePageFlow:
+    """Simula lo que hace page_lifestyle.run() internamente."""
+
+    def _seed(self, db, steps=3500, ex_min=8, sleep=5.4):
+        patient_id = db.get_or_create_patient("Luis Prueba", 58, "M")
+        db.import_wearable_records(patient_id, _make_records(40, sleep=sleep, steps=steps, hr=72))
+        db.save_lab_result(
+            patient_id,
+            raw_json='{"bioquimica": {"glucosa_mg_dl": 132, "colesterol_ldl_mg_dl": 172}}',
+            fecha="2026-01-15",
+        )
+        db.save_anthropometry(
+            patient_id, weight_kg=101.0, height_cm=176.0, waist_cm=114.0,
+            bmi=32.6, bmi_category="Obesidad grado I", waist_category="Riesgo muy aumentado",
+        )
+        return patient_id
+
+    def _plan_for(self, db, patient_id):
+        from tapia.core.lifestyle import build_lifestyle_plan
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+
+        w30, _ = _wearable_summary(patient_id, days=30)
+        anthro  = db.get_latest_anthropometry(patient_id)
+        lab     = db.get_latest_lab(patient_id)
+        return build_lifestyle_plan(
+            patient={"name": "Luis Prueba", "age": 58, "sex": "M"},
+            q={"diet_style": "mediterranea", "other_notes": "hipertension",
+               "exercise_days_last_weeks": 1},
+            anthro=anthro,
+            w30=w30,
+            lab_data=(lab or {}).get("data"),
+            final_bucket="7_dias",
+        ), w30
+
+    def test_wearable_summary_from_db(self, lifestyle_db):
+        patient_id = self._seed(lifestyle_db)
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+        w30, total = _wearable_summary(patient_id, days=30)
+        assert total == 40
+        assert w30 is not None and w30.days <= 31
+        assert w30.avg_steps == pytest.approx(3500, abs=1)
+
+    def test_sin_wearable_devuelve_none(self, lifestyle_db):
+        patient_id = lifestyle_db.get_or_create_patient("Sin Datos", 40, "F")
+        from tapia.ui.streamlit_pages.page_lifestyle import _wearable_summary
+        w30, total = _wearable_summary(patient_id, days=30)
+        assert (w30, total) == (None, 0)
+
+    def test_plan_usa_wearable_antropometria_y_analisis(self, lifestyle_db):
+        patient_id = self._seed(lifestyle_db)
+        plan, w30 = self._plan_for(lifestyle_db, patient_id)
+
+        assert plan.nutrition.energy.objective == "perder_peso"
+        assert plan.exercise.baseline_steps == pytest.approx(3500, abs=1)
+        assert any("diabetic" in p.lower() for p in plan.nutrition.priorities)
+        assert any("colesterol" in p.lower() for p in plan.nutrition.priorities)
+        assert any("hipertension" in r.lower() for r in plan.exercise.restrictions)
+
+    def test_plan_se_guarda_y_se_recupera(self, lifestyle_db):
+        from tapia.core.lifestyle import render_plan_text
+        patient_id = self._seed(lifestyle_db)
+        plan, _ = self._plan_for(lifestyle_db, patient_id)
+
+        lifestyle_db.save_lifestyle_plan(
+            patient_id=patient_id,
+            plan_text=render_plan_text(plan),
+            objective=plan.nutrition.energy.objective,
+            target_kcal=plan.nutrition.energy.target_kcal,
+            weekly_min=plan.exercise.weekly_min_target,
+            steps_goal=plan.exercise.steps_goal,
+            clearance=plan.medical_clearance,
+        )
+        saved = lifestyle_db.get_latest_lifestyle_plan(patient_id)
+        assert saved["objective"] == "perder_peso"
+        assert saved["target_kcal"] == plan.nutrition.energy.target_kcal
+        assert "PLAN DE ALIMENTACION Y EJERCICIO" in saved["plan_text"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: boton de carga desde Dropbox (sin UI real)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_st(monkeypatch):
+    """
+    Sustituye streamlit dentro de page_triage para poder ejecutar la funcion
+    de la pagina. Sin esto, un fallo tonto (una variable sin definir) solo
+    aparece al abrir la aplicacion.
+    """
+    from unittest.mock import MagicMock
+    from tapia.ui.streamlit_pages import page_triage
+
+    st = MagicMock()
+    st.columns.return_value = (MagicMock(), MagicMock())
+    st.button.return_value = False
+    st.checkbox.return_value = False
+    monkeypatch.setattr(page_triage, "st", st)
+    return st
+
+
+def _fake_dropbox(monkeypatch, configurado=True):
+    from unittest.mock import MagicMock
+    from tapia.ui.streamlit_pages import page_triage
+
+    source = MagicMock()
+    source.NAME = "dropbox"
+    source.is_configured.return_value = configurado
+    source.missing_config.return_value = [] if configurado else ["DROPBOX_APP_KEY"]
+    monkeypatch.setattr(page_triage, "DropboxSource", lambda **kw: source)
+    return source
+
+
+class TestBotonDropbox:
+
+    def _patient(self, nombre="Luis Prueba"):
+        return PatientInfo(name=nombre, age=58, sex="M")
+
+    def test_sin_configurar_solo_explica_como_hacerlo(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        llamadas = []
+        monkeypatch.setattr(page_triage, "sync_patient",
+                            lambda *a, **k: llamadas.append(a))
+        _fake_dropbox(monkeypatch, configurado=False)
+
+        page_triage._section_cloud_sync(self._patient(), None)
+
+        fake_st.expander.assert_called_once()
+        fake_st.button.assert_not_called()
+        assert llamadas == []
+
+    def test_sin_nombre_de_paciente_el_boton_esta_deshabilitado(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        _fake_dropbox(monkeypatch)
+
+        page_triage._section_cloud_sync(self._patient(nombre=""), None)
+
+        assert fake_st.button.call_args.kwargs["disabled"] is True
+
+    def test_con_nombre_el_boton_esta_activo(self, fake_st, monkeypatch):
+        from tapia.ui.streamlit_pages import page_triage
+        _fake_dropbox(monkeypatch)
+
+        page_triage._section_cloud_sync(self._patient(), 7)
+
+        assert fake_st.button.call_args.kwargs["disabled"] is False
+
+    def test_al_pulsar_sincroniza_ese_paciente(self, fake_st, monkeypatch):
+        from unittest.mock import MagicMock
+        from tapia.ui.streamlit_pages import page_triage
+        from tapia.wearables.sync import SyncResult
+
+        source = _fake_dropbox(monkeypatch)
+        fake_st.button.return_value = True
+        monkeypatch.setattr(page_triage.db, "get_sync_state", lambda *a, **k: None)
+        monkeypatch.setattr(page_triage, "log", MagicMock())
+
+        recogido = {}
+
+        def _sync(pid, **kwargs):
+            recogido["pid"] = pid
+            recogido.update(kwargs)
+            return SyncResult(files_seen=1, files_imported=1, days_inserted=3)
+
+        monkeypatch.setattr(page_triage, "sync_patient", _sync)
+
+        page_triage._section_cloud_sync(self._patient(), 7)
+
+        assert recogido["pid"] == 7
+        assert recogido["source"] is source
+        assert recogido["full"] is False
+        fake_st.rerun.assert_called_once()

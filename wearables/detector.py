@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .adapter_tapia    import TapiaAdapter
 from .adapter_apple_xml import AppleHealthXMLAdapter
+from .adapter_apple_auto import AppleAutoExportAdapter
 from .adapter_fitbit   import FitbitAdapter
 from .adapter_garmin   import GarminAdapter
 from .adapter_apple    import AppleHealthAdapter
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Orden de deteccion: del mas especifico al mas generico
 _ADAPTERS: List[BaseAdapter] = [
-    AppleHealthXMLAdapter(),  # XML nativo Apple Health (bytes)
+    AppleHealthXMLAdapter(),   # XML nativo Apple Health (bytes)
+    AppleAutoExportAdapter(),  # JSON de Health Auto Export (agrupado por metrica)
     FitbitAdapter(),
     GarminAdapter(),
     WithingsAdapter(),
@@ -49,8 +51,8 @@ def detect_and_normalize(data: Any) -> Tuple[List[NormalizedRecord], str]:
             return records, adapter.NAME
 
     raise ValueError(
-        "Formato de wearable no reconocido. "
-        "Formatos soportados: TAPIA, Fitbit, Garmin, Apple Health, Withings."
+        "Formato de wearable no reconocido. Formatos soportados: TAPIA, Fitbit, "
+        "Garmin, Apple Health (XML/ZIP y Health Auto Export), Withings."
     )
 
 

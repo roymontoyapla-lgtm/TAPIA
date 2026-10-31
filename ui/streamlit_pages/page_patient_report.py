@@ -147,10 +147,8 @@ def run() -> None:
                             patient_name=patient_nombre,
                             patient_age=patient.get("age", 0),
                             patient_sex=patient.get("sex", ""),
-                            final_bucket="2_semanas",
-                            local_score=0,
-                            local_bucket="2_semanas",
-                            ai_bucket="2_semanas",
+                            show_urgency=False,
+                            section_title="Informe clinico integral",
                         )
                         with open(tmp_path, "rb") as f:
                             pdf_bytes = f.read()

@@ -7,12 +7,14 @@ Roles disponibles:
   - medico    : acceso a triaje, pacientes, historial
   - consultor : solo lectura (historial y graficas)
 
-Las contrasenas se almacenan como hash SHA-256 + salt.
+Las contrasenas se almacenan con PBKDF2-HMAC-SHA256 + salt. Los hashes antiguos
+(SHA-256 de una vuelta) se aceptan y se migran al iniciar sesion.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -22,9 +24,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from ..core import config as _config  # noqa: F401  (carga .env antes de leer variables)
+
 logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).resolve().parent.parent / "tapia_history.db"
+
+# Clave del admin inicial: .env en local o Secrets en Streamlit Cloud
+ADMIN_PASSWORD_ENV = "TAPIA_ADMIN_PASSWORD"
+MIN_ADMIN_PASSWORD_LEN = 12
+
+# Clave por defecto publicada en versiones anteriores: nunca debe dar acceso
+_LEGACY_DEFAULT_PASSWORD = "tapia1234"
 
 ROLES = {
     "admin":     "Administrador",
@@ -36,11 +47,11 @@ ROLES = {
 PERMISSIONS = {
     "admin": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about", "manage_users",
+        "compliance", "about", "manage_users", "lifestyle",
     },
     "medico": {
         "triage", "patients", "history", "db_history",
-        "compliance", "about",
+        "compliance", "about", "lifestyle",
     },
     "consultor": {
         "history", "db_history", "about",
@@ -101,13 +112,67 @@ def init_auth_tables() -> None:
     logger.debug("Tablas de autenticacion inicializadas.")
 
 
+def _admin_password_from_env() -> Optional[str]:
+    """Devuelve la clave del admin inicial si esta definida y es valida."""
+    pwd = os.environ.get(ADMIN_PASSWORD_ENV, "").strip()
+    if not pwd:
+        return None
+    if len(pwd) < MIN_ADMIN_PASSWORD_LEN or pwd == _LEGACY_DEFAULT_PASSWORD:
+        logger.error(
+            "%s no es valida: necesita al menos %d caracteres y no puede ser la clave antigua.",
+            ADMIN_PASSWORD_ENV, MIN_ADMIN_PASSWORD_LEN,
+        )
+        return None
+    return pwd
+
+
+def admin_setup_pending() -> bool:
+    """True si aun no existe ningun usuario (falta configurar el admin inicial)."""
+    with _connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+
+
 def _ensure_default_admin() -> None:
-    """Crea el usuario admin por defecto si la tabla esta vacia."""
+    """
+    Crea el admin inicial con la clave de TAPIA_ADMIN_PASSWORD si no hay usuarios.
+    Si el usuario admin aun tiene la clave antigua publicada, la sustituye.
+    La clave nunca se escribe en el log.
+    """
+    pwd = _admin_password_from_env()
     with _connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count == 0:
-            _create_user_internal(conn, "admin", "tapia1234", "admin", "Administrador")
-            logger.info("Usuario admin por defecto creado (usuario: admin, clave: tapia1234)")
+            if pwd is None:
+                logger.warning(
+                    "No hay usuarios y %s no esta definida: no se crea el admin inicial.",
+                    ADMIN_PASSWORD_ENV,
+                )
+                return
+            _create_user_internal(conn, "admin", pwd, "admin", "Administrador")
+            logger.info("Usuario admin inicial creado desde %s.", ADMIN_PASSWORD_ENV)
+            return
+
+        row = conn.execute(
+            "SELECT id, salt, password_hash FROM users WHERE username = 'admin'"
+        ).fetchone()
+        # La clave antigua solo pudo guardarse con el hash antiguo: evita PBKDF2 en cada recarga
+        if (
+            row
+            and _is_legacy_hash(row["password_hash"])
+            and _verify_password(_LEGACY_DEFAULT_PASSWORD, row["salt"], row["password_hash"])
+        ):
+            if pwd is None:
+                logger.warning(
+                    "El usuario admin aun tiene la clave antigua (bloqueada). "
+                    "Define %s para sustituirla.", ADMIN_PASSWORD_ENV,
+                )
+                return
+            salt = secrets.token_hex(32)
+            conn.execute(
+                "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+                (_hash_password(pwd, salt), salt, row["id"]),
+            )
+            logger.warning("Clave antigua del usuario admin sustituida por %s.", ADMIN_PASSWORD_ENV)
 
 
 def _create_user_internal(
@@ -133,13 +198,47 @@ def _create_user_internal(
 # Hashing
 # ---------------------------------------------------------------------------
 
+_PBKDF2_PREFIX = "pbkdf2_sha256"
+PBKDF2_ITERATIONS = 600_000  # recomendacion OWASP para PBKDF2-HMAC-SHA256
+
+
+def _pbkdf2(password: str, salt: str, iterations: int) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations
+    ).hex()
+
+
 def _hash_password(password: str, salt: str) -> str:
+    """Devuelve 'pbkdf2_sha256$iteraciones$hash'."""
+    return f"{_PBKDF2_PREFIX}${PBKDF2_ITERATIONS}${_pbkdf2(password, salt, PBKDF2_ITERATIONS)}"
+
+
+def _legacy_hash(password: str, salt: str) -> str:
+    """Hash de versiones anteriores (SHA-256 de una vuelta). Solo para verificar."""
     combined = f"{salt}{password}{salt}"
     return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
+def _is_legacy_hash(stored_hash: str) -> bool:
+    return not stored_hash.startswith(_PBKDF2_PREFIX + "$")
+
+
+def _needs_rehash(stored_hash: str) -> bool:
+    if _is_legacy_hash(stored_hash):
+        return True
+    return stored_hash.split("$")[1] != str(PBKDF2_ITERATIONS)
+
+
 def _verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    return _hash_password(password, salt) == stored_hash
+    if _is_legacy_hash(stored_hash):
+        candidate = _legacy_hash(password, salt)
+    else:
+        try:
+            _, iterations, _ = stored_hash.split("$")
+            candidate = f"{_PBKDF2_PREFIX}${iterations}${_pbkdf2(password, salt, int(iterations))}"
+        except ValueError:
+            return False
+    return hmac.compare_digest(candidate, stored_hash)
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +260,17 @@ def login(username: str, password: str) -> Optional[Dict[str, Any]]:
         ).fetchone()
 
         if row is None:
+            # Mismo coste que un usuario real para no revelar que no existe
+            _hash_password(password, "usuario-inexistente")
             conn.execute(
                 "INSERT INTO login_attempts (username, success, timestamp) VALUES (?,0,?)",
                 (username, now),
             )
             return None
 
-        if not _verify_password(password, row["salt"], row["password_hash"]):
+        if password == _LEGACY_DEFAULT_PASSWORD or not _verify_password(
+            password, row["salt"], row["password_hash"]
+        ):
             conn.execute(
                 "INSERT INTO login_attempts (username, success, timestamp) VALUES (?,0,?)",
                 (username, now),
@@ -180,6 +283,13 @@ def login(username: str, password: str) -> Optional[Dict[str, Any]]:
             "UPDATE users SET last_login = ? WHERE id = ?",
             (now, row["id"]),
         )
+        if _needs_rehash(row["password_hash"]):
+            salt = secrets.token_hex(32)
+            conn.execute(
+                "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+                (_hash_password(password, salt), salt, row["id"]),
+            )
+            logger.info("Hash de contrasena actualizado a PBKDF2: %s", username)
         conn.execute(
             "INSERT INTO login_attempts (username, success, timestamp) VALUES (?,1,?)",
             (username, now),

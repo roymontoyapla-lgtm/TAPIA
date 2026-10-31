@@ -227,3 +227,97 @@ class TestDatabase:
 
     def test_db_path_returns_string(self, tmp_db):
         assert isinstance(tmp_db.db_path(), str)
+
+
+# ---------------------------------------------------------------------------
+# Antropometria
+# ---------------------------------------------------------------------------
+
+class TestAnthropometry:
+
+    def test_save_and_get_latest(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Ana Peso", 40, "F")
+        tmp_db.save_anthropometry(
+            pid, weight_kg=68.0, height_cm=165.0, waist_cm=82.0,
+            bmi=25.0, bmi_category="Sobrepeso", waist_category="Riesgo aumentado",
+        )
+        latest = tmp_db.get_latest_anthropometry(pid)
+        assert latest["weight_kg"] == 68.0
+        assert latest["bmi_category"] == "Sobrepeso"
+
+    def test_save_without_values_returns_none(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Sin Medidas", 30, "M")
+        assert tmp_db.save_anthropometry(pid) is None
+        assert tmp_db.get_latest_anthropometry(pid) is None
+
+    def test_same_day_updates_instead_of_duplicating(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Ana Peso", 40, "F")
+        tmp_db.save_anthropometry(pid, weight_kg=68.0, height_cm=165.0, fecha="2026-01-10")
+        tmp_db.save_anthropometry(pid, weight_kg=66.5, fecha="2026-01-10")
+        history = tmp_db.get_anthropometry_history(pid)
+        assert len(history) == 1
+        assert history[0]["weight_kg"] == 66.5
+        # La altura anterior se conserva
+        assert history[0]["height_cm"] == 165.0
+
+    def test_history_ordered_desc(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Ana Peso", 40, "F")
+        tmp_db.save_anthropometry(pid, weight_kg=70.0, fecha="2026-01-01")
+        tmp_db.save_anthropometry(pid, weight_kg=69.0, fecha="2026-02-01")
+        history = tmp_db.get_anthropometry_history(pid)
+        assert [h["fecha"] for h in history] == ["2026-02-01", "2026-01-01"]
+
+
+# ---------------------------------------------------------------------------
+# Planes de alimentacion y ejercicio
+# ---------------------------------------------------------------------------
+
+class TestLifestylePlans:
+
+    def test_save_and_retrieve(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Plan Paciente", 50, "M")
+        tmp_db.save_lifestyle_plan(
+            pid, plan_text="PLAN COMPLETO", objective="perder_peso",
+            target_kcal=1800, weekly_min=300, steps_goal=8000, clearance=True,
+        )
+        latest = tmp_db.get_latest_lifestyle_plan(pid)
+        assert latest["plan_text"] == "PLAN COMPLETO"
+        assert latest["target_kcal"] == 1800
+        assert latest["clearance"] is True
+
+    def test_plan_text_encrypted_in_raw_db(self, tmp_db, tmp_path):
+        pid = tmp_db.get_or_create_patient("Plan Paciente", 50, "M")
+        tmp_db.save_lifestyle_plan(pid, plan_text="TEXTO_SECRETO_DEL_PLAN")
+        raw = (tmp_path / "test_tapia.db").read_bytes()
+        assert b"TEXTO_SECRETO_DEL_PLAN" not in raw
+
+    def test_ai_text_optional(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Plan Paciente", 50, "M")
+        tmp_db.save_lifestyle_plan(pid, plan_text="PLAN", ai_text="", ai_model="")
+        assert tmp_db.get_latest_lifestyle_plan(pid)["ai_text"] == ""
+
+    def test_ai_text_roundtrip(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Plan Paciente", 50, "M")
+        tmp_db.save_lifestyle_plan(
+            pid, plan_text="PLAN", ai_text="Plan redactado para el paciente",
+            ai_model="claude-sonnet-4-6",
+        )
+        latest = tmp_db.get_latest_lifestyle_plan(pid)
+        assert latest["ai_text"] == "Plan redactado para el paciente"
+        assert latest["ai_model"] == "claude-sonnet-4-6"
+
+    def test_delete_plan(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Plan Paciente", 50, "M")
+        plan_id = tmp_db.save_lifestyle_plan(pid, plan_text="PLAN")
+        assert tmp_db.delete_lifestyle_plan(plan_id) is True
+        assert tmp_db.get_latest_lifestyle_plan(pid) is None
+
+    def test_delete_patient_data_removes_plans_and_anthropometry(self, tmp_db):
+        pid = tmp_db.get_or_create_patient("Borrar Todo", 45, "F")
+        tmp_db.save_anthropometry(pid, weight_kg=70.0, height_cm=166.0)
+        tmp_db.save_lifestyle_plan(pid, plan_text="PLAN")
+        result = tmp_db.delete_patient_data(pid)
+        assert result["anthropometry"] == 1
+        assert result["lifestyle_plans"] == 1
+        assert tmp_db.get_latest_anthropometry(pid) is None
+        assert tmp_db.get_latest_lifestyle_plan(pid) is None
