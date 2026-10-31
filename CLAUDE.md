@@ -140,6 +140,8 @@ exportación y borrado.
 - **SQLite efímero en Streamlit Cloud**: el disco se reinicia en cada despliegue, así
   que lo guardado se pierde y la base vuelve a la copia del repositorio. Es el principal
   freno para cualquier automatización.
-- `tapia_history.db` está versionado en git pese a figurar en `.gitignore` (se subió
-  antes de ignorarlo). No lo incluyas en commits: si aparece modificado tras ejecutar
-  tests o la app, restáuralo con `git checkout -- tapia_history.db`.
+- `tapia_history.db` se dejó de versionar en v1.1.2 (estaba en el repo público con la
+  tabla de usuarios). No lo vuelvas a añadir. En Streamlit Cloud arranca vacía y el
+  admin inicial se crea desde el secreto `TAPIA_ADMIN_PASSWORD`. Sigue en el historial
+  de git: purgarlo exige reescribir el historial.
+- Los ZIP de versión se generan sin `.env`, `.tapia_key` ni `tapia_history.db`.

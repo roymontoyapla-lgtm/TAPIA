@@ -1,5 +1,17 @@
 # Changelog de TAPIA
 
+## v1.1.2 - 2026-10-31 (seguridad)
+
+### Seguridad
+- **`tapia_history.db` fuera del repositorio.** Contenia la tabla de usuarios en
+  un repositorio publico. En Streamlit Cloud la base arranca vacia y el admin se
+  crea desde el secreto `TAPIA_ADMIN_PASSWORD`.
+- **Sin hash ni sal en la sesion.** `login()` ya no devuelve `password_hash` ni
+  `salt`, que acababan guardados en `st.session_state`.
+
+### Otros
+- Nuevo test en `tests/test_auth.py` (14 en total).
+
 ## v1.1.1 - 2026-10-31 (seguridad)
 
 ### Seguridad
@@ -21,7 +33,5 @@
 - Nuevos tests en `tests/test_auth.py` (13), con datos sinteticos.
 
 ### Pendiente conocido
-- `tapia_history.db` sigue versionada en el repositorio y se reinicia en cada
-  despliegue de Streamlit Cloud.
 - 5 tests de Dropbox (`tests/test_wearable_cloud.py`) fallan en local, ya
   fallaban antes de esta version.
