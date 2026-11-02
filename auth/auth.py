@@ -295,7 +295,8 @@ def login(username: str, password: str) -> Optional[Dict[str, Any]]:
             (username, now),
         )
         logger.info("Login correcto: %s (%s)", username, row["role"])
-        return dict(row)
+        # Nunca devolver el hash ni la sal: el dict acaba en st.session_state
+        return {k: row[k] for k in row.keys() if k not in ("password_hash", "salt")}
 
 
 def has_permission(role: str, permission: str) -> bool:

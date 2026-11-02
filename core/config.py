@@ -181,6 +181,14 @@ class Config:
 
 cfg = Config()
 
+# Depende del entorno (Secrets / .env), no de config.yaml, que es igual en todos
+DEMO_MODE_ENV = "TAPIA_DEMO_MODE"
+
+
+def demo_mode() -> bool:
+    """True si TAPIA_DEMO_MODE esta activo: entorno de demostracion, solo datos ficticios."""
+    return os.environ.get(DEMO_MODE_ENV, "").strip().lower() in ("1", "true", "si", "yes")
+
 # Configurar nivel de log según config.yaml
 logging.basicConfig(
     level=getattr(logging, cfg.app.log_level, logging.WARNING),

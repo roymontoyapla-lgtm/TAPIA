@@ -2,8 +2,10 @@
 Capa de cifrado para datos en reposo.
 Usa Fernet (AES-128-CBC + HMAC-SHA256) de la librería `cryptography`.
 
-La clave se genera una sola vez y se guarda en .tapia_key (fuera del repo).
-Si el fichero de clave no existe se crea automáticamente al primer uso.
+Origen de la clave, por orden:
+  1. Variable TAPIA_ENCRYPTION_KEY (Secrets de Streamlit Cloud o .env). Necesaria
+     en la nube, donde el disco se borra en cada reinicio.
+  2. Fichero .tapia_key (fuera del repo). Si no existe se crea al primer uso.
 """
 
 from __future__ import annotations
@@ -13,10 +15,14 @@ import logging
 import os
 from pathlib import Path
 
+from ..core import config as _config  # noqa: F401  (carga .env antes de leer variables)
+
 logger = logging.getLogger(__name__)
 
 # Ruta de la clave: junto al proyecto, fuera del control de versiones
 _KEY_PATH = Path(__file__).resolve().parent.parent / ".tapia_key"
+
+KEY_ENV = "TAPIA_ENCRYPTION_KEY"
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -33,8 +39,29 @@ except ImportError:
 # Gestión de la clave
 # ---------------------------------------------------------------------------
 
+def _key_from_env() -> bytes | None:
+    """
+    Clave de TAPIA_ENCRYPTION_KEY, o None si no esta definida.
+    Si esta mal formada lanza ValueError: generar otra en silencio dejaria
+    ilegibles los datos cifrados con la buena.
+    """
+    raw = os.environ.get(KEY_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        Fernet(raw.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as e:
+        raise ValueError(
+            f"{KEY_ENV} no es una clave Fernet valida (44 caracteres base64)."
+        ) from e
+    return raw.encode("ascii")
+
+
 def _load_or_create_key() -> bytes:
-    """Lee la clave Fernet del fichero, o la genera si no existe."""
+    """Lee la clave de la variable de entorno o del fichero; si no hay, la genera."""
+    env_key = _key_from_env()
+    if env_key is not None:
+        return env_key
     if _KEY_PATH.exists():
         key = _KEY_PATH.read_bytes().strip()
         logger.debug("Clave de cifrado cargada desde %s", _KEY_PATH)
@@ -92,3 +119,10 @@ def is_available() -> bool:
 def key_path() -> str:
     """Ruta al fichero de clave (para mostrarlo en la UI)."""
     return str(_KEY_PATH)
+
+
+def key_location() -> str:
+    """Describe de donde sale la clave, sin revelarla (para la UI)."""
+    if os.environ.get(KEY_ENV, "").strip():
+        return f"variable {KEY_ENV}"
+    return key_path()

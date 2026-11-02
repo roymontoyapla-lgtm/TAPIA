@@ -1,5 +1,23 @@
 # Changelog de TAPIA
 
+## v1.1.3 - 2026-11-02 (entorno de demostracion)
+
+### Seguridad
+- **Clave de cifrado desde secreto.** Si existe `TAPIA_ENCRYPTION_KEY`, se usa en
+  lugar de `.tapia_key`. Imprescindible en Streamlit Cloud, donde el fichero se
+  pierde en cada reinicio. Una clave mal formada da un error claro en vez de
+  generar otra en silencio. En local, sin la variable, todo sigue igual.
+- La pagina Historial BD indica de donde sale la clave sin mostrarla.
+
+### Demostracion
+- **Modo demostracion** con `TAPIA_DEMO_MODE=1`: aviso visible en todas las
+  pantallas (tambien en el login) y etiqueta en la barra lateral pidiendo usar
+  solo datos ficticios.
+
+### Otros
+- `.env.example` documenta `TAPIA_ENCRYPTION_KEY` y `TAPIA_DEMO_MODE`.
+- Nuevos tests: `tests/test_crypto_key.py` (6) y `tests/test_demo.py` (12).
+
 ## v1.1.2 - 2026-10-31 (seguridad)
 
 ### Seguridad

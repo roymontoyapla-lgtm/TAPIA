@@ -39,6 +39,13 @@ from tapia.ui.theme import inject as inject_theme
 
 inject_theme()
 
+# Aviso de demostracion: visible en todas las pantallas, tambien en el login
+from tapia.ui.demo import DEMO_SIDEBAR, demo_banner_text
+
+_demo_banner = demo_banner_text()
+if _demo_banner:
+    st.warning(_demo_banner)
+
 # Inicializar BD y tablas al arrancar
 from tapia.db import database as db
 from tapia.compliance.audit import init_audit_table
@@ -131,6 +138,8 @@ with st.sidebar:
         st.markdown("## TAPIA")
 
     st.caption(f"v{cfg.app.version}")
+    if _demo_banner:
+        st.caption(f":orange[{DEMO_SIDEBAR}]")
     st.divider()
 
     # Info del usuario logueado

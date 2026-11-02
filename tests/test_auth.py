@@ -54,6 +54,13 @@ class TestAdminInicial:
         user = auth.login("admin", CLAVE_SINTETICA)
         assert user is not None and user["role"] == "admin"
 
+    def test_login_no_devuelve_hash_ni_sal(self, db_temporal, monkeypatch):
+        monkeypatch.setenv(auth.ADMIN_PASSWORD_ENV, CLAVE_SINTETICA)
+        auth.init_auth_tables()
+        user = auth.login("admin", CLAVE_SINTETICA)
+        assert "password_hash" not in user and "salt" not in user
+        assert {"id", "username", "role", "full_name"} <= user.keys()
+
     def test_clave_corta_se_rechaza(self, db_temporal, monkeypatch):
         monkeypatch.setenv(auth.ADMIN_PASSWORD_ENV, "corta")
         auth.init_auth_tables()

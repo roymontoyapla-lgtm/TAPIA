@@ -9,7 +9,7 @@ import streamlit as st
 
 from ...core.triage import URGENCY_LABELS
 from ...db import database as db
-from ...db.crypto import is_available as crypto_ok, key_path
+from ...db.crypto import is_available as crypto_ok, key_location
 from ..session import init
 
 _BUCKET_COLOR = {
@@ -98,7 +98,7 @@ def _section_management() -> None:
     if crypto_ok():
         st.success(
             f"Cifrado activo (Fernet AES-128).\n\n"
-            f"Clave en: {key_path()}\n\n"
+            f"Clave en: {key_location()}\n\n"
             f"Base de datos en: {db.db_path()}"
         )
     else:
